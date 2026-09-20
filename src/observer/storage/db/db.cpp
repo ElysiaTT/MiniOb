@@ -176,6 +176,65 @@ RC Db::create_table(const char *table_name, span<const AttrInfoSqlNode> attribut
   return RC::SUCCESS;
 }
 
+RC Db::drop_table(const char *table_name)
+{
+  if (common::is_blank(table_name)) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  auto table_iter = opened_tables_.find(table_name);
+  if (table_iter == opened_tables_.end()) {
+    return RC::SCHEMA_TABLE_NOT_EXIST;
+  }
+
+  Table *table = table_iter->second;
+  vector<string> index_files;
+  const TableMeta &table_meta = table->table_meta();
+  for (int i = 0; i < table_meta.index_num(); i++) {
+    const IndexMeta *index_meta = table_meta.index(i);
+    index_files.emplace_back(table_index_file(path_.c_str(), table_name, index_meta->name()));
+  }
+
+  const filesystem::path meta_file = table_meta_file(path_.c_str(), table_name);
+  filesystem::path dropped_meta_file = meta_file;
+  dropped_meta_file += ".drop";
+
+  error_code ec;
+  filesystem::rename(meta_file, dropped_meta_file, ec);
+  if (ec) {
+    LOG_ERROR("Failed to mark table metadata as dropped. table=%s, file=%s, error=%s",
+        table_name, meta_file.c_str(), ec.message().c_str());
+    return RC::IOERR_WRITE;
+  }
+
+  opened_tables_.erase(table_iter);
+  delete table;
+
+  vector<filesystem::path> files_to_remove;
+  files_to_remove.emplace_back(table_data_file(path_.c_str(), table_name));
+  files_to_remove.emplace_back(table_lob_file(path_.c_str(), table_name));
+  for (const string &index_file : index_files) {
+    files_to_remove.emplace_back(index_file);
+  }
+  files_to_remove.emplace_back(dropped_meta_file);
+
+  RC rc = RC::SUCCESS;
+  for (const filesystem::path &file : files_to_remove) {
+    ec.clear();
+    filesystem::remove(file, ec);
+    if (ec) {
+      LOG_ERROR("Failed to remove table file. table=%s, file=%s, error=%s",
+          table_name, file.c_str(), ec.message().c_str());
+      rc = RC::IOERR_WRITE;
+    }
+  }
+
+  if (OB_SUCC(rc)) {
+    LOG_INFO("Drop table success. table=%s", table_name);
+  }
+  return rc;
+}
+
 Table *Db::find_table(const char *table_name) const
 {
   unordered_map<string, Table *>::const_iterator iter = opened_tables_.find(table_name);

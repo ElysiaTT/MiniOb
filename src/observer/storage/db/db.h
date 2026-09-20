@@ -71,6 +71,11 @@ public:
       const StorageFormat storage_format = StorageFormat::ROW_FORMAT);
 
   /**
+   * @brief Drop a table and remove all of its persistent files.
+   */
+  RC drop_table(const char *table_name);
+
+  /**
    * @brief 根据表名查找表
    */
   Table *find_table(const char *table_name) const;
