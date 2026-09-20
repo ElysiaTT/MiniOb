@@ -13,6 +13,8 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include "storage/index/bplus_tree_index.h"
+#include <string.h>
+
 #include "common/log/log.h"
 #include "storage/table/table.h"
 #include "storage/db/db.h"
@@ -82,7 +84,26 @@ RC BplusTreeIndex::close()
 
 RC BplusTreeIndex::insert_entry(const char *record, const RID *rid)
 {
-  return index_handler_.insert_entry(record + field_meta_.offset(), rid);
+  const char *key = record + field_meta_.offset();
+  if (index_meta_.unique()) {
+    int key_len = field_meta_.len();
+    if (field_meta_.type() == AttrType::CHARS) {
+      key_len = static_cast<int>(strnlen(key, field_meta_.len()));
+    }
+
+    list<RID> existing_rids;
+    RC rc = index_handler_.get_entry(key, key_len, existing_rids);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to check unique index. index=%s, rc=%s", index_meta_.name(), strrc(rc));
+      return rc;
+    }
+    if (!existing_rids.empty()) {
+      LOG_INFO("duplicate key rejected by unique index. index=%s", index_meta_.name());
+      return RC::RECORD_DUPLICATE_KEY;
+    }
+  }
+
+  return index_handler_.insert_entry(key, rid);
 }
 
 RC BplusTreeIndex::delete_entry(const char *record, const RID *rid)

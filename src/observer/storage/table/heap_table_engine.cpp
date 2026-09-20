@@ -11,6 +11,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/table/heap_table_engine.h"
 #include "storage/record/heap_record_scanner.h"
 #include "common/log/log.h"
+#include "common/lang/filesystem.h"
 #include "storage/index/bplus_tree_index.h"
 #include "storage/common/meta_util.h"
 #include "storage/db/db.h"
@@ -157,7 +158,7 @@ RC HeapTableEngine::get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadW
   return rc;
 }
 
-RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const char *index_name)
+RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const char *index_name, bool unique)
 {
   if (common::is_blank(index_name) || nullptr == field_meta) {
     LOG_INFO("Invalid input arguments, table name is %s, index_name is blank or attribute_name is blank", table_meta_->name());
@@ -166,7 +167,7 @@ RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const ch
 
   IndexMeta new_index_meta;
 
-  RC rc = new_index_meta.init(index_name, *field_meta);
+  RC rc = new_index_meta.init(index_name, *field_meta, unique);
   if (rc != RC::SUCCESS) {
     LOG_INFO("Failed to init IndexMeta in table:%s, index_name:%s, field_name:%s", 
              table_meta_->name(), index_name, field_meta->name());
@@ -184,12 +185,25 @@ RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const ch
     return rc;
   }
 
+  auto cleanup_index = [&]() {
+    index->close();
+    delete index;
+    index = nullptr;
+    std::error_code cleanup_error;
+    filesystem::remove(index_file, cleanup_error);
+    if (cleanup_error) {
+      LOG_WARN("failed to remove incomplete index file. file=%s, error=%s",
+          index_file.c_str(), cleanup_error.message().c_str());
+    }
+  };
+
   // 遍历当前的所有数据，插入这个索引
   RecordScanner *scanner = nullptr;
   rc = get_record_scanner(scanner, trx, ReadWriteMode::READ_ONLY);
   if (rc != RC::SUCCESS) {
     LOG_WARN("failed to create scanner while creating index. table=%s, index=%s, rc=%s", 
              table_meta_->name(), index_name, strrc(rc));
+    cleanup_index();
     return rc;
   }
 
@@ -199,6 +213,9 @@ RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const ch
     if (rc != RC::SUCCESS) {
       LOG_WARN("failed to insert record into index while creating index. table=%s, index=%s, rc=%s",
                table_meta_->name(), index_name, strrc(rc));
+      scanner->close_scan();
+      delete scanner;
+      cleanup_index();
       return rc;
     }
   }
@@ -207,19 +224,21 @@ RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const ch
   } else {
     LOG_WARN("failed to insert record into index while creating index. table=%s, index=%s, rc=%s",
              table_meta_->name(), index_name, strrc(rc));
+    scanner->close_scan();
+    delete scanner;
+    cleanup_index();
     return rc;
   }
   scanner->close_scan();
   delete scanner;
   LOG_INFO("inserted all records into new index. table=%s, index=%s", table_meta_->name(), index_name);
 
-  indexes_.push_back(index);
-
   /// 接下来将这个索引放到表的元数据中
   TableMeta new_table_meta(*table_meta_);
   rc = new_table_meta.add_index(new_index_meta);
   if (rc != RC::SUCCESS) {
     LOG_ERROR("Failed to add index (%s) on table (%s). error=%d:%s", index_name, table_meta_->name(), rc, strrc(rc));
+    cleanup_index();
     return rc;
   }
 
@@ -231,10 +250,15 @@ RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const ch
   fs.open(tmp_file, ios_base::out | ios_base::binary | ios_base::trunc);
   if (!fs.is_open()) {
     LOG_ERROR("Failed to open file for write. file name=%s, errmsg=%s", tmp_file.c_str(), strerror(errno));
+    cleanup_index();
     return RC::IOERR_OPEN;  // 创建索引中途出错，要做还原操作
   }
   if (new_table_meta.serialize(fs) < 0) {
     LOG_ERROR("Failed to dump new table meta to file: %s. sys err=%d:%s", tmp_file.c_str(), errno, strerror(errno));
+    fs.close();
+    std::error_code cleanup_error;
+    filesystem::remove(tmp_file, cleanup_error);
+    cleanup_index();
     return RC::IOERR_WRITE;
   }
   fs.close();
@@ -247,10 +271,15 @@ RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const ch
     LOG_ERROR("Failed to rename tmp meta file (%s) to normal meta file (%s) while creating index (%s) on table (%s). "
               "system error=%d:%s",
               tmp_file.c_str(), meta_file.c_str(), index_name, table_meta_->name(), errno, strerror(errno));
+    std::error_code cleanup_error;
+    filesystem::remove(tmp_file, cleanup_error);
+    cleanup_index();
     return RC::IOERR_WRITE;
   }
 
   table_meta_->swap(new_table_meta);
+  indexes_.push_back(index);
+  index = nullptr;
 
   LOG_INFO("Successfully added a new index (%s) on the table (%s)", index_name, table_meta_->name());
   return rc;
