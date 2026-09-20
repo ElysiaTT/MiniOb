@@ -22,6 +22,12 @@ See the Mulan PSL v2 for more details. */
 
 class Expression;
 
+struct OrderBySqlNode
+{
+  unique_ptr<Expression> expression;
+  bool                   ascending = true;
+};
+
 /**
  * @defgroup SQLParser SQL Parser
  */
@@ -92,6 +98,7 @@ struct SelectSqlNode
   vector<string>                 relations;    ///< 查询的表
   vector<ConditionSqlNode>       conditions;   ///< 查询条件，使用AND串联起来多个条件
   vector<unique_ptr<Expression>> group_by;     ///< group by clause
+  vector<OrderBySqlNode>         order_by;     ///< order by clause
 };
 
 /**

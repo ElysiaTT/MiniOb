@@ -27,6 +27,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/table_get_logical_operator.h"
 #include "sql/operator/update_logical_operator.h"
 #include "sql/operator/group_by_logical_operator.h"
+#include "sql/operator/order_by_logical_operator.h"
 
 #include "sql/stmt/calc_stmt.h"
 #include "sql/stmt/delete_stmt.h"
@@ -151,6 +152,14 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
   }
 
   last_oper = &project_oper;
+
+  unique_ptr<LogicalOperator> order_by_oper;
+  if (!select_stmt->order_by().empty()) {
+    vector<bool> ascending = select_stmt->order_ascending();
+    order_by_oper = make_unique<OrderByLogicalOperator>(std::move(select_stmt->order_by()), std::move(ascending));
+    order_by_oper->add_child(std::move(*last_oper));
+    last_oper = &order_by_oper;
+  }
 
   logical_operator = std::move(*last_oper);
   return RC::SUCCESS;
@@ -317,6 +326,7 @@ RC LogicalPlanGenerator::create_group_by_plan(SelectStmt *select_stmt, unique_pt
   vector<unique_ptr<Expression>> &group_by_expressions = select_stmt->group_by();
   vector<Expression *> aggregate_expressions;
   vector<unique_ptr<Expression>> &query_expressions = select_stmt->query_expressions();
+  vector<unique_ptr<Expression>> &order_by_expressions = select_stmt->order_by();
   function<RC(unique_ptr<Expression>&)> collector = [&](unique_ptr<Expression> &expr) -> RC {
     RC rc = RC::SUCCESS;
     if (expr->type() == ExprType::AGGREGATION) {
@@ -362,13 +372,22 @@ RC LogicalPlanGenerator::create_group_by_plan(SelectStmt *select_stmt, unique_pt
   for (unique_ptr<Expression> &expression : query_expressions) {
     bind_group_by_expr(expression);
   }
+  for (unique_ptr<Expression> &expression : order_by_expressions) {
+    bind_group_by_expr(expression);
+  }
 
   for (unique_ptr<Expression> &expression : query_expressions) {
+    find_unbound_column(expression);
+  }
+  for (unique_ptr<Expression> &expression : order_by_expressions) {
     find_unbound_column(expression);
   }
 
   // collect all aggregate expressions
   for (unique_ptr<Expression> &expression : query_expressions) {
+    collector(expression);
+  }
+  for (unique_ptr<Expression> &expression : order_by_expressions) {
     collector(expression);
   }
 
