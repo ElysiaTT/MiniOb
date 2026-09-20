@@ -32,11 +32,14 @@ RC BplusTreeIndex::create(Table *table, const char *file_name, const IndexMeta &
 
   Index::init(index_meta, field_metas);
 
-  int key_length = 0;
+  int  key_length = 0;
+  bool has_nullable_field = false;
   for (const FieldMeta *field_meta : field_metas) {
-    key_length += field_meta->len();
+    key_length += field_meta->len() + (field_meta->nullable() ? 1 : 0);
+    has_nullable_field = has_nullable_field || field_meta->nullable();
   }
-  const AttrType key_type = field_metas.size() == 1 ? field_metas.front()->type() : AttrType::VECTORS;
+  const AttrType key_type = field_metas.size() == 1 && !has_nullable_field ? field_metas.front()->type()
+                                                                        : AttrType::VECTORS;
 
   BufferPoolManager &bpm = table->db()->buffer_pool_manager();
   RC rc = index_handler_.create(table->db()->log_handler(), bpm, file_name, key_type, key_length);
@@ -95,9 +98,14 @@ RC BplusTreeIndex::insert_entry(const char *record, const RID *rid)
   vector<char> key_buffer;
   make_record_key(record, key_buffer);
   const char *key = key_buffer.data();
-  if (index_meta_.unique()) {
+  bool contains_null = false;
+  for (const FieldMeta &field_meta : field_metas_) {
+    contains_null = contains_null || (field_meta.nullable() && record[field_meta.null_offset()] != 0);
+  }
+  if (index_meta_.unique() && !contains_null) {
     int key_len = static_cast<int>(key_buffer.size());
-    if (field_metas_.size() == 1 && field_metas_.front().type() == AttrType::CHARS) {
+    if (field_metas_.size() == 1 && field_metas_.front().type() == AttrType::CHARS &&
+        !field_metas_.front().nullable()) {
       key_len = static_cast<int>(strnlen(key, field_metas_.front().len()));
     }
 
@@ -127,13 +135,19 @@ void BplusTreeIndex::make_record_key(const char *record, vector<char> &key) cons
 {
   size_t key_length = 0;
   for (const FieldMeta &field_meta : field_metas_) {
-    key_length += field_meta.len();
+    key_length += field_meta.len() + (field_meta.nullable() ? 1 : 0);
   }
 
   key.resize(key_length);
   size_t key_offset = 0;
   for (const FieldMeta &field_meta : field_metas_) {
-    memcpy(key.data() + key_offset, record + field_meta.offset(), field_meta.len());
+    const bool is_null = field_meta.nullable() && record[field_meta.null_offset()] != 0;
+    if (field_meta.nullable()) {
+      key[key_offset++] = is_null ? 1 : 0;
+    }
+    if (!is_null) {
+      memcpy(key.data() + key_offset, record + field_meta.offset(), field_meta.len());
+    }
     key_offset += field_meta.len();
   }
 }

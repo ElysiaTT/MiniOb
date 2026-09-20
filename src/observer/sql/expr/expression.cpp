@@ -336,6 +336,15 @@ static RC compare_scalar_values(const Value &left, const Value &right, int &resu
 
 RC ComparisonExpr::compare_value(const Value &left, const Value &right, bool &result) const
 {
+  if (comp_ == IS_OP || comp_ == IS_NOT_OP) {
+    result = comp_ == IS_OP ? left.is_null() : !left.is_null();
+    return RC::SUCCESS;
+  }
+  if (left.is_null() || right.is_null()) {
+    result = false;
+    return RC::SUCCESS;
+  }
+
   int cmp_result = 0;
   RC  rc         = compare_scalar_values(left, right, cmp_result);
   if (OB_FAIL(rc)) {
@@ -363,6 +372,10 @@ RC ComparisonExpr::compare_value(const Value &left, const Value &right, bool &re
     } break;
     case IN_OP:
     case NOT_IN_OP: {
+      return RC::INVALID_ARGUMENT;
+    }
+    case IS_OP:
+    case IS_NOT_OP: {
       return RC::INVALID_ARGUMENT;
     }
     default: {
@@ -426,8 +439,18 @@ RC ComparisonExpr::get_value(const Tuple &tuple, Value &value) const
       return rc;
     }
 
+    if (left_value.is_null()) {
+      value.set_boolean(false);
+      return RC::SUCCESS;
+    }
+
     bool found = false;
+    bool contains_null = false;
     for (const Value &candidate : right_subquery->values()) {
+      if (candidate.is_null()) {
+        contains_null = true;
+        continue;
+      }
       int comparison = 0;
       rc = compare_scalar_values(left_value, candidate, comparison);
       if (OB_FAIL(rc)) {
@@ -438,7 +461,7 @@ RC ComparisonExpr::get_value(const Tuple &tuple, Value &value) const
         break;
       }
     }
-    value.set_boolean(comp_ == IN_OP ? found : !found);
+    value.set_boolean(comp_ == IN_OP ? found : (!found && !contains_null));
     return RC::SUCCESS;
   }
 

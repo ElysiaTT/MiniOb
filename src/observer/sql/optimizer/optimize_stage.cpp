@@ -25,6 +25,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/expression_iterator.h"
 #include "sql/operator/logical_operator.h"
 #include "sql/operator/table_get_logical_operator.h"
+#include "storage/table/table.h"
 #include "sql/stmt/stmt.h"
 #include "sql/optimizer/cascade/optimizer.h"
 #include "sql/optimizer/optimizer_utils.h"
@@ -48,6 +49,22 @@ static bool expression_contains_subquery(Expression &expression)
   return contains_subquery;
 }
 
+static bool expression_contains_null(Expression &expression)
+{
+  if (expression.type() == ExprType::VALUE && static_cast<ValueExpr &>(expression).get_value().is_null()) {
+    return true;
+  }
+
+  bool contains_null = false;
+  ExpressionIterator::iterate_child_expr(expression, [&contains_null](unique_ptr<Expression> &child) {
+    if (!contains_null) {
+      contains_null = expression_contains_null(*child);
+    }
+    return RC::SUCCESS;
+  });
+  return contains_null;
+}
+
 static bool logical_plan_contains_subquery(LogicalOperator &logical_operator)
 {
   for (unique_ptr<Expression> &expression : logical_operator.expressions()) {
@@ -67,6 +84,41 @@ static bool logical_plan_contains_subquery(LogicalOperator &logical_operator)
 
   for (unique_ptr<LogicalOperator> &child : logical_operator.children()) {
     if (logical_plan_contains_subquery(*child)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool logical_plan_requires_tuple_execution(LogicalOperator &logical_operator)
+{
+  if (logical_plan_contains_subquery(logical_operator)) {
+    return true;
+  }
+
+  for (unique_ptr<Expression> &expression : logical_operator.expressions()) {
+    if (expression_contains_null(*expression)) {
+      return true;
+    }
+  }
+
+  if (logical_operator.type() == LogicalOperatorType::TABLE_GET) {
+    auto &table_get = static_cast<TableGetLogicalOperator &>(logical_operator);
+    const TableMeta &table_meta = table_get.table()->table_meta();
+    for (int i = table_meta.sys_field_num(); i < table_meta.field_num(); i++) {
+      if (table_meta.field(i)->nullable()) {
+        return true;
+      }
+    }
+    for (unique_ptr<Expression> &predicate : table_get.predicates()) {
+      if (expression_contains_null(*predicate)) {
+        return true;
+      }
+    }
+  }
+
+  for (unique_ptr<LogicalOperator> &child : logical_operator.children()) {
+    if (logical_plan_requires_tuple_execution(*child)) {
       return true;
     }
   }
@@ -134,7 +186,7 @@ RC OptimizeStage::generate_physical_plan(
   RC rc = RC::SUCCESS;
   if (session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR &&
       LogicalOperator::can_generate_vectorized_operator(logical_operator->type()) &&
-      !logical_plan_contains_subquery(*logical_operator)) {
+      !logical_plan_requires_tuple_execution(*logical_operator)) {
     LOG_TRACE("use chunk iterator");
     session->set_used_chunk_mode(true);
     rc    = physical_plan_generator_.create_vec(*logical_operator, physical_operator, session);

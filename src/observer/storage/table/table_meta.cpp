@@ -84,13 +84,13 @@ RC TableMeta::init(int32_t table_id, const char *name, const vector<FieldMeta> *
     const AttrInfoSqlNode &attr_info = attributes[i];
     // `i` is the col_id of fields[i]
     rc = fields_[i + trx_field_num].init(
-      attr_info.name.c_str(), attr_info.type, field_offset, attr_info.length, true /*visible*/, i);
+      attr_info.name.c_str(), attr_info.type, field_offset, attr_info.length, true /*visible*/, i, attr_info.nullable);
     if (OB_FAIL(rc)) {
       LOG_ERROR("Failed to init field meta. table name=%s, field name: %s", name, attr_info.name.c_str());
       return rc;
     }
 
-    field_offset += attr_info.length;
+    field_offset += attr_info.length + (attr_info.nullable ? 1 : 0);
   }
 
   primary_keys_ = primary_keys;
@@ -287,7 +287,8 @@ int TableMeta::deserialize(istream &is)
   storage_engine_ = static_cast<StorageEngine>(storage_engine);
   name_.swap(table_name);
   fields_.swap(fields);
-  record_size_ = fields_.back().offset() + fields_.back().len() - fields_.begin()->offset();
+  record_size_ = fields_.back().offset() + fields_.back().len() + (fields_.back().nullable() ? 1 : 0) -
+                 fields_.begin()->offset();
 
   for (const FieldMeta &field_meta : fields_) {
     if (!field_meta.visible()) {

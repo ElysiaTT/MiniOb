@@ -105,6 +105,9 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         AND
         NOT
         IN
+        IS
+        NULLABLE
+        NULL_T
         SET
         ON
         LOAD
@@ -174,6 +177,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 
 /** type 定义了各种解析后的结果输出的是什么类型。类型对应了 union 中的定义的成员变量名称 **/
 %type <number>              type
+%type <number>              nullable
 %type <condition>           condition
 %type <value>               value
 %type <number>              number
@@ -390,20 +394,28 @@ attr_def_list:
     ;
     
 attr_def:
-    ID type LBRACE number RBRACE 
+    ID type LBRACE number RBRACE nullable
     {
       $$ = new AttrInfoSqlNode;
       $$->type = (AttrType)$2;
       $$->name = $1;
       $$->length = $4;
+      $$->nullable = $6;
     }
-    | ID type
+    | ID type nullable
     {
       $$ = new AttrInfoSqlNode;
       $$->type = (AttrType)$2;
       $$->name = $1;
       $$->length = 4;
+      $$->nullable = $3;
     }
+    ;
+nullable:
+    /* empty */ { $$ = 0; }
+    | NULLABLE  { $$ = 1; }
+    | NULL_T    { $$ = 1; }
+    | NOT NULL_T { $$ = 0; }
     ;
 number:
     NUMBER {$$ = $1;}
@@ -493,6 +505,11 @@ value:
       char *tmp = common::substr($1,1,strlen($1)-2);
       $$ = new Value(tmp);
       free(tmp);
+    }
+    |NULL_T {
+      $$ = new Value;
+      $$->set_null();
+      @$ = @1;
     }
     ;
 storage_format:
@@ -724,6 +741,8 @@ comp_op:
     | NE { $$ = NOT_EQUAL; }
     | IN { $$ = IN_OP; }
     | NOT IN { $$ = NOT_IN_OP; }
+    | IS { $$ = IS_OP; }
+    | IS NOT { $$ = IS_NOT_OP; }
     ;
 
 // your code here

@@ -40,13 +40,23 @@ RC Index::make_key(const vector<Value> &values, vector<char> &key) const
 
   size_t key_length = 0;
   for (const FieldMeta &field : field_metas_) {
-    key_length += field.len();
+    key_length += field.len() + (field.nullable() ? 1 : 0);
   }
   key.assign(key_length, 0);
 
   size_t offset = 0;
   for (size_t i = 0; i < values.size(); i++) {
     const FieldMeta &field = field_metas_[i];
+    if (field.nullable()) {
+      key[offset++] = values[i].is_null() ? 1 : 0;
+    }
+    if (values[i].is_null()) {
+      if (!field.nullable()) {
+        return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+      }
+      offset += field.len();
+      continue;
+    }
     Value            value;
     RC               rc = RC::SUCCESS;
     if (values[i].attr_type() == field.type()) {

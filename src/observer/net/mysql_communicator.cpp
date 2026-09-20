@@ -1002,7 +1002,11 @@ RC MysqlCommunicator::write_tuple_result(SqlResult *sql_result, vector<char> &pa
         break;  // TODO send error packet
       }
 
-      pos += store_lenenc_string(buf + pos, value.to_string().c_str());
+      if (value.is_null()) {
+        pos += store_int1(buf + pos, static_cast<int8_t>(0xFB));
+      } else {
+        pos += store_lenenc_string(buf + pos, value.to_string().c_str());
+      }
     }
 
     int payload_length = pos - 4;
@@ -1038,7 +1042,11 @@ RC MysqlCommunicator::write_chunk_result(SqlResult *sql_result, vector<char> &pa
 
       for (int col_idx = 0; col_idx < column_num; col_idx++) {
         Value value = chunk.get_value(col_idx, i);
-        pos += store_lenenc_string(buf + pos, value.to_string().c_str());
+        if (value.is_null()) {
+          pos += store_int1(buf + pos, static_cast<int8_t>(0xFB));
+        } else {
+          pos += store_lenenc_string(buf + pos, value.to_string().c_str());
+        }
       }
 
       int payload_length = pos - 4;

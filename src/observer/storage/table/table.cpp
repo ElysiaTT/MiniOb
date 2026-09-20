@@ -228,7 +228,9 @@ RC Table::make_record(int value_num, const Value *values, Record &record)
   for (int i = 0; i < value_num && OB_SUCC(rc); i++) {
     const FieldMeta *field = table_meta_.field(i + normal_field_start_index);
     const Value &    value = values[i];
-    if (field->type() != value.attr_type()) {
+    if (value.is_null()) {
+      rc = set_value_to_record(record_data, value, field);
+    } else if (field->type() != value.attr_type()) {
       Value real_value;
       rc = Value::cast_to(value, field->type(), real_value);
       if (OB_FAIL(rc)) {
@@ -253,6 +255,19 @@ RC Table::make_record(int value_num, const Value *values, Record &record)
 
 RC Table::set_value_to_record(char *record_data, const Value &value, const FieldMeta *field)
 {
+  if (value.is_null()) {
+    if (!field->nullable()) {
+      LOG_WARN("field is not nullable. table=%s, field=%s", table_meta_.name(), field->name());
+      return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+    }
+    memset(record_data + field->offset(), 0, field->len());
+    record_data[field->null_offset()] = 1;
+    return RC::SUCCESS;
+  }
+
+  if (field->nullable()) {
+    record_data[field->null_offset()] = 0;
+  }
   size_t       copy_len = field->len();
   const size_t data_len = value.length();
   if (field->type() == AttrType::CHARS) {
@@ -272,7 +287,12 @@ RC Table::make_updated_record(
   }
 
   Value real_value;
-  if (value.attr_type() == field_meta.type()) {
+  if (value.is_null()) {
+    if (!field_meta.nullable()) {
+      return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+    }
+    real_value.set_null(field_meta.type());
+  } else if (value.attr_type() == field_meta.type()) {
     real_value = value;
   } else {
     RC rc = Value::cast_to(value, field_meta.type(), real_value);

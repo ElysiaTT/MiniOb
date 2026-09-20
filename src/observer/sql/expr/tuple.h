@@ -198,6 +198,9 @@ public:
     cell.reset();
     cell.set_type(field_meta->type());
     cell.set_data(this->record_->data() + field_meta->offset(), field_meta->len());
+    if (field_meta->nullable() && this->record_->data()[field_meta->null_offset()] != 0) {
+      cell.set_null(field_meta->type());
+    }
     return RC::SUCCESS;
   }
 

@@ -125,6 +125,15 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
       return OB_FAIL(rc) ? rc : RC::INVALID_ARGUMENT;
     }
     filter_unit->set_right_expression(std::move(bound_expressions.front()));
+    if (comp == IS_OP || comp == IS_NOT_OP) {
+      const Expression *right = filter_unit->right_expression().get();
+      if (right->type() != ExprType::VALUE || !static_cast<const ValueExpr *>(right)->get_value().is_null()) {
+        delete filter_unit;
+        filter_unit = nullptr;
+        LOG_WARN("IS and IS NOT currently require NULL on the right-hand side");
+        return RC::INVALID_ARGUMENT;
+      }
+    }
     if ((comp == IN_OP || comp == NOT_IN_OP) &&
         (filter_unit->left_expression()->type() == ExprType::SUBQUERY ||
             filter_unit->right_expression()->type() != ExprType::SUBQUERY)) {

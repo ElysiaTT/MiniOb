@@ -47,7 +47,13 @@ RC UpdateStmt::create(Db *db, UpdateSqlNode &update, Stmt *&stmt)
   }
 
   Value value = update.value;
-  if (value.attr_type() != field_meta->type()) {
+  if (value.is_null() && !field_meta->nullable()) {
+    LOG_WARN("field is not nullable. table=%s, field=%s", table->name(), field_meta->name());
+    return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+  }
+  if (value.is_null()) {
+    value.set_null(field_meta->type());
+  } else if (value.attr_type() != field_meta->type()) {
     Value cast_value;
     RC rc = Value::cast_to(value, field_meta->type(), cast_value);
     if (OB_FAIL(rc)) {

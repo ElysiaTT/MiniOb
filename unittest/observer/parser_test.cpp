@@ -28,6 +28,18 @@ TEST(ParserTest, nested_subquery_test)
   ASSERT_EQ(parse(sql, &result), RC::SUCCESS);
 }
 
+TEST(ParserTest, null_test)
+{
+  ParsedSqlResult result;
+  ASSERT_EQ(parse("create table t(id int not null, score float null, note char(16) nullable)", &result), RC::SUCCESS);
+
+  ParsedSqlResult insert_result;
+  ASSERT_EQ(parse("insert into t values (1, null, null)", &insert_result), RC::SUCCESS);
+
+  ParsedSqlResult select_result;
+  ASSERT_EQ(parse("select id from t where score is null and note is not null", &select_result), RC::SUCCESS);
+}
+
 TEST(ParserTest, DISABLED_aggregation_test)
 {
   ParsedSqlResult result;

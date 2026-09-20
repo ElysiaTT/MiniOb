@@ -59,35 +59,61 @@ public:
 
   static RC add(const Value &left, const Value &right, Value &result)
   {
+    if (left.is_null() || right.is_null()) {
+      result.set_null(result.attr_type());
+      return RC::SUCCESS;
+    }
     return DataType::type_instance(result.attr_type())->add(left, right, result);
   }
 
   static RC subtract(const Value &left, const Value &right, Value &result)
   {
+    if (left.is_null() || right.is_null()) {
+      result.set_null(result.attr_type());
+      return RC::SUCCESS;
+    }
     return DataType::type_instance(result.attr_type())->subtract(left, right, result);
   }
 
   static RC multiply(const Value &left, const Value &right, Value &result)
   {
+    if (left.is_null() || right.is_null()) {
+      result.set_null(result.attr_type());
+      return RC::SUCCESS;
+    }
     return DataType::type_instance(result.attr_type())->multiply(left, right, result);
   }
 
   static RC divide(const Value &left, const Value &right, Value &result)
   {
+    if (left.is_null() || right.is_null()) {
+      result.set_null(result.attr_type());
+      return RC::SUCCESS;
+    }
     return DataType::type_instance(result.attr_type())->divide(left, right, result);
   }
 
   static RC negative(const Value &value, Value &result)
   {
+    if (value.is_null()) {
+      result.set_null(result.attr_type());
+      return RC::SUCCESS;
+    }
     return DataType::type_instance(result.attr_type())->negative(value, result);
   }
 
   static RC cast_to(const Value &value, AttrType to_type, Value &result)
   {
+    if (value.is_null()) {
+      result.set_null(to_type);
+      return RC::SUCCESS;
+    }
     return DataType::type_instance(value.attr_type())->cast_to(value, to_type, result);
   }
 
   void set_type(AttrType type) { this->attr_type_ = type; }
+  void set_null(AttrType type = AttrType::UNDEFINED);
+  bool is_null() const { return is_null_; }
   void set_data(char *data, int length);
   void set_data(const char *data, int length) { this->set_data(const_cast<char *>(data), length); }
   void set_value(const Value &value);
@@ -135,4 +161,5 @@ private:
 
   /// 是否申请并占有内存, 目前对于 CHARS 类型 own_data_ 为true, 其余类型 own_data_ 为false
   bool own_data_ = false;
+  bool is_null_  = false;
 };
