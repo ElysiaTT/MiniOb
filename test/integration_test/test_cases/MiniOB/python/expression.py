@@ -57,7 +57,7 @@ def create_test_cases() -> TestCase:
       'INSERT INTO expression_other VALUES (1, 4), (2, 8), (3, 2);', expected=ResultString.SUCCESS)
   join_group.add_block_sql_instruction('''
       SELECT expression_table.id, expression_other.x FROM expression_table, expression_other WHERE expression_table.id = expression_other.x AND expression_table.a + expression_other.x > expression_table.b ORDER BY expression_table.id;
-      id | x
+      expression_table.id | expression_other.x
       1 | 1
       3 | 3
   ''')

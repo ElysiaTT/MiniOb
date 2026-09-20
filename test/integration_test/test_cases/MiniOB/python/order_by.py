@@ -87,7 +87,7 @@ def create_test_cases() -> TestCase:
       expected=ResultString.SUCCESS)
   join_group.add_block_sql_instruction('''
       SELECT order_table.id, dept_table.label FROM order_table, dept_table WHERE order_table.dept = dept_table.dept ORDER BY dept_table.label DESC, order_table.id ASC;
-      id | label
+      order_table.id | dept_table.label
       5 | top
       1 | middle
       3 | middle

@@ -73,6 +73,8 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         TABLES
         INDEX
         UNIQUE
+        INNER
+        JOIN
         CALC
         SELECT
         DESC
@@ -138,8 +140,8 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
   vector<Value> *                            value_list;
   vector<vector<Value>> *                    value_row_list;
   vector<ConditionSqlNode> *                 condition_list;
+  FromSqlNode *                              from_clause;
   vector<RelAttrSqlNode> *                   rel_attr_list;
-  vector<string> *                           relation_list;
   vector<string> *                           key_list;
   char *                                     cstring;
   int                                        number;
@@ -157,8 +159,8 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %destructor { delete $$; } <value_list>
 %destructor { delete $$; } <value_row_list>
 %destructor { delete $$; } <condition_list>
+%destructor { delete $$; } <from_clause>
 // %destructor { delete $$; } <rel_attr_list>
-%destructor { delete $$; } <relation_list>
 %destructor { delete $$; } <key_list>
 
 %token <number> NUMBER
@@ -181,10 +183,10 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <value_row_list>      value_row_list
 %type <condition_list>      where
 %type <condition_list>      condition_list
+%type <from_clause>         from_clause
 %type <cstring>             storage_format
 %type <key_list>            primary_key
 %type <key_list>            attr_list
-%type <relation_list>       rel_list
 %type <expression>          expression
 %type <expression>          aggregate_expression
 %type <expression_list>     expression_list
@@ -524,7 +526,7 @@ update_stmt:      /*  update 语句的语法解析树*/
     }
     ;
 select_stmt:        /*  select 语句的语法解析树*/
-    SELECT expression_list FROM rel_list where group_by order_by
+    SELECT expression_list FROM from_clause where group_by order_by
     {
       $$ = new ParsedSqlNode(SCF_SELECT);
       if ($2 != nullptr) {
@@ -533,12 +535,15 @@ select_stmt:        /*  select 语句的语法解析树*/
       }
 
       if ($4 != nullptr) {
-        $$->selection.relations.swap(*$4);
+        $$->selection.relations.swap($4->relations);
+        $$->selection.conditions.swap($4->conditions);
         delete $4;
       }
 
       if ($5 != nullptr) {
-        $$->selection.conditions.swap(*$5);
+        for (ConditionSqlNode &condition : *$5) {
+          $$->selection.conditions.emplace_back(std::move(condition));
+        }
         delete $5;
       }
 
@@ -551,6 +556,27 @@ select_stmt:        /*  select 语句的语法解析树*/
         $$->selection.order_by.swap(*$7);
         delete $7;
       }
+    }
+    ;
+from_clause:
+    relation
+    {
+      $$ = new FromSqlNode;
+      $$->relations.emplace_back($1);
+    }
+    | from_clause COMMA relation
+    {
+      $$ = $1;
+      $$->relations.emplace_back($3);
+    }
+    | from_clause INNER JOIN relation ON condition_list
+    {
+      $$ = $1;
+      $$->relations.emplace_back($4);
+      for (ConditionSqlNode &condition : *$6) {
+        $$->conditions.emplace_back(std::move(condition));
+      }
+      delete $6;
     }
     ;
 calc_stmt:
@@ -601,6 +627,10 @@ expression:
     | '*' {
       $$ = new StarExpr();
     }
+    | ID DOT '*' {
+      $$ = new StarExpr($1);
+      $$->set_name(token_name(sql_string, &@$));
+    }
     | value {
       $$ = new ValueExpr(*$1);
       $$->set_name(token_name(sql_string, &@$));
@@ -640,22 +670,6 @@ relation:
       $$ = $1;
     }
     ;
-rel_list:
-    relation {
-      $$ = new vector<string>();
-      $$->push_back($1);
-    }
-    | relation COMMA rel_list {
-      if ($3 != nullptr) {
-        $$ = $3;
-      } else {
-        $$ = new vector<string>;
-      }
-
-      $$->insert($$->begin(), $1);
-    }
-    ;
-
 where:
     /* empty */
     {

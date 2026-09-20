@@ -83,6 +83,12 @@ struct ConditionSqlNode
   unique_ptr<Expression> right_expr;  ///< general right-hand expression
 };
 
+struct FromSqlNode
+{
+  vector<string>           relations;
+  vector<ConditionSqlNode> conditions;
+};
+
 /**
  * @brief 描述一个select语句
  * @ingroup SQLParser

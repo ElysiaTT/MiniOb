@@ -22,11 +22,13 @@ class Stmt;
 class CalcStmt;
 class SelectStmt;
 class FilterStmt;
+class FilterUnit;
 class InsertStmt;
 class DeleteStmt;
 class UpdateStmt;
 class ExplainStmt;
 class LogicalOperator;
+class Expression;
 
 class LogicalPlanGenerator
 {
@@ -44,6 +46,8 @@ private:
   RC create_plan(DeleteStmt *delete_stmt, unique_ptr<LogicalOperator> &logical_operator);
   RC create_plan(UpdateStmt *update_stmt, unique_ptr<LogicalOperator> &logical_operator);
   RC create_plan(ExplainStmt *explain_stmt, unique_ptr<LogicalOperator> &logical_operator);
+
+  RC create_comparison_expression(FilterUnit *filter_unit, unique_ptr<Expression> &expression);
 
   RC create_group_by_plan(SelectStmt *select_stmt, unique_ptr<LogicalOperator> &logical_operator);
 

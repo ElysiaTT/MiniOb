@@ -69,7 +69,7 @@ def create_test_cases() -> TestCase:
   join_group.add_sql_instruction('INSERT INTO dept_table VALUES (30, 3000);', expected=ResultString.SUCCESS)
   join_group.add_sort_block_sql_instruction('''
       SELECT group_table.dept, avg(group_table.score), max(dept_table.budget) FROM group_table, dept_table WHERE group_table.dept = dept_table.dept GROUP BY group_table.dept;
-      dept | avg(group_table.score) | max(dept_table.budget)
+      group_table.dept | avg(group_table.score) | max(dept_table.budget)
       10 | 85 | 1000
       20 | 65 | 2000
       30 | 100 | 3000
