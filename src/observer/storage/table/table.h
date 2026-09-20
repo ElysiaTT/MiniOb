@@ -78,6 +78,9 @@ public:
    */
   RC make_record(int value_num, const Value *values, Record &record);
 
+  RC make_updated_record(
+      const Record &old_record, const FieldMeta &field_meta, const Value &value, Record &new_record);
+
   /**
    * @brief 在当前的表中插入一条记录
    * @details 在表文件和索引中插入关联数据。这里只管在表中插入数据，不关心事务相关操作。

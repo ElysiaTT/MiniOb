@@ -264,6 +264,33 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
   return RC::SUCCESS;
 }
 
+RC Table::make_updated_record(
+    const Record &old_record, const FieldMeta &field_meta, const Value &value, Record &new_record)
+{
+  if (old_record.len() != table_meta_.record_size()) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  Value real_value;
+  if (value.attr_type() == field_meta.type()) {
+    real_value = value;
+  } else {
+    RC rc = Value::cast_to(value, field_meta.type(), real_value);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  }
+
+  RC rc = new_record.copy_data(old_record.data(), old_record.len());
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  new_record.set_rid(old_record.rid());
+
+  memset(new_record.data() + field_meta.offset(), 0, field_meta.len());
+  return set_value_to_record(new_record.data(), real_value, &field_meta);
+}
+
 RC Table::get_record_scanner(RecordScanner *&scanner, Trx *trx, ReadWriteMode mode)
 {
   return engine_->get_record_scanner(scanner, trx, mode);

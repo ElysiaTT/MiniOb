@@ -26,6 +26,7 @@ bool LogicalOperator::can_generate_vectorized_operator(const LogicalOperatorType
   switch (type)
   {
   case LogicalOperatorType::CALC:
+  case LogicalOperatorType::UPDATE:
   case LogicalOperatorType::DELETE:
   case LogicalOperatorType::INSERT:
     bool_ret = false;
@@ -45,4 +46,3 @@ void LogicalOperator::generate_general_child()
     child->generate_general_child();
   }
 }
-

@@ -8,43 +8,30 @@ EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
 MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 See the Mulan PSL v2 for more details. */
 
-//
-// Created by Wangyunlai on 2022/5/22.
-//
-
 #pragma once
 
-#include "common/sys/rc.h"
-#include "sql/stmt/stmt.h"
+#include "sql/operator/logical_operator.h"
 
 class Table;
 class FieldMeta;
-class FilterStmt;
 
-/**
- * @brief 更新语句
- * @ingroup Statement
- */
-class UpdateStmt : public Stmt
+class UpdateLogicalOperator : public LogicalOperator
 {
 public:
-  UpdateStmt(Table *table, const FieldMeta *field_meta, const Value &value, FilterStmt *filter_stmt);
-  ~UpdateStmt() override;
+  UpdateLogicalOperator(Table *table, const FieldMeta *field_meta, const Value &value)
+      : table_(table), field_meta_(field_meta), value_(value)
+  {}
+  ~UpdateLogicalOperator() override = default;
 
-  StmtType type() const override { return StmtType::UPDATE; }
+  LogicalOperatorType type() const override { return LogicalOperatorType::UPDATE; }
+  OpType              get_op_type() const override { return OpType::LOGICALUPDATE; }
 
-public:
-  static RC create(Db *db, const UpdateSqlNode &update_sql, Stmt *&stmt);
-
-public:
   Table           *table() const { return table_; }
   const FieldMeta *field_meta() const { return field_meta_; }
   const Value     &value() const { return value_; }
-  FilterStmt      *filter_stmt() const { return filter_stmt_; }
 
 private:
-  Table           *table_       = nullptr;
-  const FieldMeta *field_meta_  = nullptr;
+  Table           *table_      = nullptr;
+  const FieldMeta *field_meta_ = nullptr;
   Value            value_;
-  FilterStmt      *filter_stmt_ = nullptr;
 };

@@ -103,6 +103,41 @@ RC HeapTableEngine::delete_record(const Record &record)
   return rc;
 }
 
+RC HeapTableEngine::update_record_with_trx(const Record &old_record, const Record &new_record, Trx *trx)
+{
+  if (old_record.rid() != new_record.rid() || old_record.len() != new_record.len()) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  RC rc = delete_entry_of_indexes(old_record.data(), old_record.rid(), true);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to delete old index entries while updating. table=%s, rid=%s, rc=%s",
+        table_meta_->name(), old_record.rid().to_string().c_str(), strrc(rc));
+    return rc;
+  }
+
+  rc = insert_entry_of_indexes(new_record.data(), new_record.rid());
+  if (OB_FAIL(rc)) {
+    delete_entry_of_indexes(new_record.data(), new_record.rid(), false);
+    insert_entry_of_indexes(old_record.data(), old_record.rid());
+    LOG_WARN("failed to insert new index entries while updating. table=%s, rid=%s, rc=%s",
+        table_meta_->name(), old_record.rid().to_string().c_str(), strrc(rc));
+    return rc;
+  }
+
+  rc = record_handler_->visit_record(old_record.rid(), [&new_record](Record &record) {
+    memcpy(record.data(), new_record.data(), new_record.len());
+    return true;
+  });
+  if (OB_FAIL(rc)) {
+    delete_entry_of_indexes(new_record.data(), new_record.rid(), false);
+    insert_entry_of_indexes(old_record.data(), old_record.rid());
+    LOG_WARN("failed to update record data. table=%s, rid=%s, rc=%s",
+        table_meta_->name(), old_record.rid().to_string().c_str(), strrc(rc));
+  }
+  return rc;
+}
+
 RC HeapTableEngine::get_record_scanner(RecordScanner *&scanner, Trx *trx, ReadWriteMode mode)
 {
   scanner = new HeapRecordScanner(table_, *data_buffer_pool_, trx, db_->log_handler(), mode, nullptr);
