@@ -334,6 +334,19 @@ RC ExpressionBinder::bind_arithmetic_expression(
     left_expr.reset(left.release());
   }
 
+  if (!is_numerical_type(left_expr->value_type())) {
+    LOG_WARN("arithmetic expression only supports numeric operands");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  if (!right_expr) {
+    if (arithmetic_expr->arithmetic_type() != ArithmeticExpr::Type::NEGATIVE) {
+      return RC::INVALID_ARGUMENT;
+    }
+    bound_expressions.emplace_back(std::move(expr));
+    return RC::SUCCESS;
+  }
+
   child_bound_expressions.clear();
   rc = bind_expression(right_expr, child_bound_expressions);
   if (OB_FAIL(rc)) {
@@ -348,6 +361,11 @@ RC ExpressionBinder::bind_arithmetic_expression(
   unique_ptr<Expression> &right = child_bound_expressions[0];
   if (right.get() != right_expr.get()) {
     right_expr.reset(right.release());
+  }
+
+  if (!is_numerical_type(right_expr->value_type())) {
+    LOG_WARN("arithmetic expression only supports numeric operands");
+    return RC::INVALID_ARGUMENT;
   }
 
   bound_expressions.emplace_back(std::move(expr));

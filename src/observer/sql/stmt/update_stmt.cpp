@@ -28,7 +28,7 @@ UpdateStmt::~UpdateStmt()
   filter_stmt_ = nullptr;
 }
 
-RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
+RC UpdateStmt::create(Db *db, UpdateSqlNode &update, Stmt *&stmt)
 {
   if (db == nullptr || update.relation_name.empty() || update.attribute_name.empty()) {
     return RC::INVALID_ARGUMENT;

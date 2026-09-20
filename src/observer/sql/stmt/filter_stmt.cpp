@@ -16,8 +16,10 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/string.h"
 #include "common/log/log.h"
 #include "common/sys/rc.h"
+#include "common/lang/unordered_set.h"
 #include "storage/db/db.h"
 #include "storage/table/table.h"
+#include "sql/parser/expression_binder.h"
 
 FilterStmt::~FilterStmt()
 {
@@ -28,7 +30,7 @@ FilterStmt::~FilterStmt()
 }
 
 RC FilterStmt::create(Db *db, Table *default_table, unordered_map<string, Table *> *tables,
-    const ConditionSqlNode *conditions, int condition_num, FilterStmt *&stmt)
+    ConditionSqlNode *conditions, int condition_num, FilterStmt *&stmt)
 {
   RC rc = RC::SUCCESS;
   stmt  = nullptr;
@@ -79,7 +81,7 @@ RC get_table_and_field(Db *db, Table *default_table, unordered_map<string, Table
 }
 
 RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<string, Table *> *tables,
-    const ConditionSqlNode &condition, FilterUnit *&filter_unit)
+    ConditionSqlNode &condition, FilterUnit *&filter_unit)
 {
   RC rc = RC::SUCCESS;
 
@@ -90,6 +92,41 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
   }
 
   filter_unit = new FilterUnit;
+
+  if (condition.left_expr && condition.right_expr) {
+    BinderContext binder_context;
+    if (tables != nullptr) {
+      unordered_set<Table *> added_tables;
+      for (const auto &entry : *tables) {
+        if (added_tables.insert(entry.second).second) {
+          binder_context.add_table(entry.second);
+        }
+      }
+    } else if (default_table != nullptr) {
+      binder_context.add_table(default_table);
+    }
+
+    ExpressionBinder expression_binder(binder_context);
+    vector<unique_ptr<Expression>> bound_expressions;
+    rc = expression_binder.bind_expression(condition.left_expr, bound_expressions);
+    if (OB_FAIL(rc) || bound_expressions.size() != 1) {
+      delete filter_unit;
+      filter_unit = nullptr;
+      return OB_FAIL(rc) ? rc : RC::INVALID_ARGUMENT;
+    }
+    filter_unit->set_left_expression(std::move(bound_expressions.front()));
+
+    bound_expressions.clear();
+    rc = expression_binder.bind_expression(condition.right_expr, bound_expressions);
+    if (OB_FAIL(rc) || bound_expressions.size() != 1) {
+      delete filter_unit;
+      filter_unit = nullptr;
+      return OB_FAIL(rc) ? rc : RC::INVALID_ARGUMENT;
+    }
+    filter_unit->set_right_expression(std::move(bound_expressions.front()));
+    filter_unit->set_comp(comp);
+    return RC::SUCCESS;
+  }
 
   if (condition.left_is_attr) {
     Table           *table = nullptr;

@@ -59,10 +59,18 @@ public:
   const FilterObj &left() const { return left_; }
   const FilterObj &right() const { return right_; }
 
+  void set_left_expression(unique_ptr<Expression> expression) { left_expression_ = std::move(expression); }
+  void set_right_expression(unique_ptr<Expression> expression) { right_expression_ = std::move(expression); }
+
+  unique_ptr<Expression> &left_expression() { return left_expression_; }
+  unique_ptr<Expression> &right_expression() { return right_expression_; }
+
 private:
   CompOp    comp_ = NO_OP;
   FilterObj left_;
   FilterObj right_;
+  unique_ptr<Expression> left_expression_;
+  unique_ptr<Expression> right_expression_;
 };
 
 /**
@@ -80,10 +88,10 @@ public:
 
 public:
   static RC create(Db *db, Table *default_table, unordered_map<string, Table *> *tables,
-      const ConditionSqlNode *conditions, int condition_num, FilterStmt *&stmt);
+      ConditionSqlNode *conditions, int condition_num, FilterStmt *&stmt);
 
   static RC create_filter_unit(Db *db, Table *default_table, unordered_map<string, Table *> *tables,
-      const ConditionSqlNode &condition, FilterUnit *&filter_unit);
+      ConditionSqlNode &condition, FilterUnit *&filter_unit);
 
 private:
   vector<FilterUnit *> filter_units_;  // 默认当前都是AND关系
