@@ -39,7 +39,8 @@ public:
   }
   RC get_record(const RID &rid, Record &record) override { return RC::UNIMPLEMENTED; }
 
-  RC create_index(Trx *trx, const FieldMeta *field_meta, const char *index_name, bool unique) override
+  RC create_index(Trx *trx, const vector<const FieldMeta *> &field_metas,
+      const char *index_name, bool unique) override
   {
     return RC::UNIMPLEMENTED;
   }

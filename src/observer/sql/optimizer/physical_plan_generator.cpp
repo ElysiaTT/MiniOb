@@ -47,6 +47,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/update_logical_operator.h"
 #include "sql/operator/update_physical_operator.h"
 #include "sql/optimizer/physical_plan_generator.h"
+#include "storage/index/index.h"
 
 using namespace std;
 
@@ -140,11 +141,73 @@ RC PhysicalPlanGenerator::create_plan(TableGetLogicalOperator &table_get_oper, u
 
   Index     *index      = nullptr;
   ValueExpr *value_expr = nullptr;
+  vector<char> composite_key;
+  size_t       indexed_field_count = 0;
+  const TableMeta &table_meta           = table->table_meta();
+  for (int index_pos = 0; index_pos < table_meta.index_num(); index_pos++) {
+    const IndexMeta *index_meta = table_meta.index(index_pos);
+    if (index_meta->fields().size() <= indexed_field_count) {
+      continue;
+    }
+
+    vector<Value> values;
+    bool          all_fields_matched = true;
+    for (const string &field_name : index_meta->fields()) {
+      const Value *matched_value = nullptr;
+      for (const unique_ptr<Expression> &expr : predicates) {
+        if (expr->type() != ExprType::COMPARISON) {
+          continue;
+        }
+        auto comparison_expr = static_cast<ComparisonExpr *>(expr.get());
+        if (comparison_expr->comp() != EQUAL_TO) {
+          continue;
+        }
+
+        Expression *left_expr  = comparison_expr->left().get();
+        Expression *right_expr = comparison_expr->right().get();
+        FieldExpr  *field_expr  = nullptr;
+        ValueExpr  *constant    = nullptr;
+        if (left_expr->type() == ExprType::FIELD && right_expr->type() == ExprType::VALUE) {
+          field_expr = static_cast<FieldExpr *>(left_expr);
+          constant   = static_cast<ValueExpr *>(right_expr);
+        } else if (right_expr->type() == ExprType::FIELD && left_expr->type() == ExprType::VALUE) {
+          field_expr = static_cast<FieldExpr *>(right_expr);
+          constant   = static_cast<ValueExpr *>(left_expr);
+        }
+
+        if (field_expr != nullptr && field_expr->field().table() == table &&
+            0 == strcmp(field_expr->field_name(), field_name.c_str())) {
+          matched_value = &constant->get_value();
+          break;
+        }
+      }
+
+      if (matched_value == nullptr) {
+        all_fields_matched = false;
+        break;
+      }
+      values.emplace_back(*matched_value);
+    }
+
+    if (!all_fields_matched) {
+      continue;
+    }
+    Index *candidate = table->find_index(index_meta->name());
+    vector<char> candidate_key;
+    if (candidate != nullptr && OB_SUCC(candidate->make_key(values, candidate_key))) {
+      index = candidate;
+      composite_key.swap(candidate_key);
+      indexed_field_count = index_meta->fields().size();
+    }
+  }
   for (auto &expr : predicates) {
+    if (index != nullptr) {
+      break;
+    }
     if (expr->type() == ExprType::COMPARISON) {
       auto comparison_expr = static_cast<ComparisonExpr *>(expr.get());
       // 简单处理，就找等值查询
-      if (comparison_expr->comp() != EQUAL_TO && comparison_expr->comp() != NOT_EQUAL) {
+      if (comparison_expr->comp() != EQUAL_TO) {
         continue;
       }
 
@@ -179,15 +242,20 @@ RC PhysicalPlanGenerator::create_plan(TableGetLogicalOperator &table_get_oper, u
   }
 
   if (index != nullptr) {
-    ASSERT(value_expr != nullptr, "got an index but value expr is null ?");
-
-    const Value               &value           = value_expr->get_value();
+    if (composite_key.empty()) {
+      ASSERT(value_expr != nullptr, "got an index but value expr is null ?");
+      vector<Value> values{value_expr->get_value()};
+      RC rc = index->make_key(values, composite_key);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+    }
     IndexScanPhysicalOperator *index_scan_oper = new IndexScanPhysicalOperator(table,
         index,
         table_get_oper.read_write_mode(),
-        &value,
+        composite_key,
         true /*left_inclusive*/,
-        &value,
+        composite_key,
         true /*right_inclusive*/);
 
     index_scan_oper->set_predicates(std::move(predicates));

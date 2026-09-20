@@ -21,7 +21,8 @@ See the Mulan PSL v2 for more details. */
 
 BplusTreeIndex::~BplusTreeIndex() noexcept { close(); }
 
-RC BplusTreeIndex::create(Table *table, const char *file_name, const IndexMeta &index_meta, const FieldMeta &field_meta)
+RC BplusTreeIndex::create(Table *table, const char *file_name, const IndexMeta &index_meta,
+    const vector<const FieldMeta *> &field_metas)
 {
   if (inited_) {
     LOG_WARN("Failed to create index due to the index has been created before. file_name:%s, index:%s, field:%s",
@@ -29,10 +30,16 @@ RC BplusTreeIndex::create(Table *table, const char *file_name, const IndexMeta &
     return RC::RECORD_OPENNED;
   }
 
-  Index::init(index_meta, field_meta);
+  Index::init(index_meta, field_metas);
+
+  int key_length = 0;
+  for (const FieldMeta *field_meta : field_metas) {
+    key_length += field_meta->len();
+  }
+  const AttrType key_type = field_metas.size() == 1 ? field_metas.front()->type() : AttrType::VECTORS;
 
   BufferPoolManager &bpm = table->db()->buffer_pool_manager();
-  RC rc = index_handler_.create(table->db()->log_handler(), bpm, file_name, field_meta.type(), field_meta.len());
+  RC rc = index_handler_.create(table->db()->log_handler(), bpm, file_name, key_type, key_length);
   if (RC::SUCCESS != rc) {
     LOG_WARN("Failed to create index_handler, file_name:%s, index:%s, field:%s, rc:%s",
         file_name, index_meta.name(), index_meta.field(), strrc(rc));
@@ -46,7 +53,8 @@ RC BplusTreeIndex::create(Table *table, const char *file_name, const IndexMeta &
   return RC::SUCCESS;
 }
 
-RC BplusTreeIndex::open(Table *table, const char *file_name, const IndexMeta &index_meta, const FieldMeta &field_meta)
+RC BplusTreeIndex::open(Table *table, const char *file_name, const IndexMeta &index_meta,
+    const vector<const FieldMeta *> &field_metas)
 {
   if (inited_) {
     LOG_WARN("Failed to open index due to the index has been initedd before. file_name:%s, index:%s, field:%s",
@@ -54,7 +62,7 @@ RC BplusTreeIndex::open(Table *table, const char *file_name, const IndexMeta &in
     return RC::RECORD_OPENNED;
   }
 
-  Index::init(index_meta, field_meta);
+  Index::init(index_meta, field_metas);
 
   BufferPoolManager &bpm = table->db()->buffer_pool_manager();
   RC rc = index_handler_.open(table->db()->log_handler(), bpm, file_name);
@@ -84,11 +92,13 @@ RC BplusTreeIndex::close()
 
 RC BplusTreeIndex::insert_entry(const char *record, const RID *rid)
 {
-  const char *key = record + field_meta_.offset();
+  vector<char> key_buffer;
+  make_record_key(record, key_buffer);
+  const char *key = key_buffer.data();
   if (index_meta_.unique()) {
-    int key_len = field_meta_.len();
-    if (field_meta_.type() == AttrType::CHARS) {
-      key_len = static_cast<int>(strnlen(key, field_meta_.len()));
+    int key_len = static_cast<int>(key_buffer.size());
+    if (field_metas_.size() == 1 && field_metas_.front().type() == AttrType::CHARS) {
+      key_len = static_cast<int>(strnlen(key, field_metas_.front().len()));
     }
 
     list<RID> existing_rids;
@@ -108,7 +118,24 @@ RC BplusTreeIndex::insert_entry(const char *record, const RID *rid)
 
 RC BplusTreeIndex::delete_entry(const char *record, const RID *rid)
 {
-  return index_handler_.delete_entry(record + field_meta_.offset(), rid);
+  vector<char> key;
+  make_record_key(record, key);
+  return index_handler_.delete_entry(key.data(), rid);
+}
+
+void BplusTreeIndex::make_record_key(const char *record, vector<char> &key) const
+{
+  size_t key_length = 0;
+  for (const FieldMeta &field_meta : field_metas_) {
+    key_length += field_meta.len();
+  }
+
+  key.resize(key_length);
+  size_t key_offset = 0;
+  for (const FieldMeta &field_meta : field_metas_) {
+    memcpy(key.data() + key_offset, record + field_meta.offset(), field_meta.len());
+    key_offset += field_meta.len();
+  }
 }
 
 IndexScanner *BplusTreeIndex::create_scanner(

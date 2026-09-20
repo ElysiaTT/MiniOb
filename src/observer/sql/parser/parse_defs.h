@@ -204,10 +204,10 @@ struct AnalyzeTableSqlNode
  */
 struct CreateIndexSqlNode
 {
-  string index_name;      ///< Index name
-  string relation_name;   ///< Relation name
-  string attribute_name;  ///< Attribute name
-  bool   unique = false;  ///< Whether duplicate keys are rejected
+  string         index_name;       ///< Index name
+  string         relation_name;    ///< Relation name
+  vector<string> attribute_names;  ///< Indexed attributes, in key order
+  bool           unique = false;   ///< Whether duplicate composite keys are rejected
 };
 
 /**
