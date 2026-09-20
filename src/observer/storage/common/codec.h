@@ -418,6 +418,7 @@ public:
   {
     RC rc = RC::SUCCESS;
     switch (val.attr_type()) {
+      case AttrType::DATES:
       case AttrType::INTS:
         if (OB_FAIL(OrderedCode::append(dst, (int64_t)val.get_int()))) {
           LOG_WARN("append failed");

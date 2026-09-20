@@ -113,6 +113,10 @@ void Value::reset()
 void Value::set_data(char *data, int length)
 {
   switch (attr_type_) {
+    case AttrType::DATES: {
+      value_.int_value_ = *(int *)data;
+      length_           = length;
+    } break;
     case AttrType::CHARS: {
       set_string(data, length);
     } break;
@@ -148,6 +152,13 @@ void Value::set_float(float val)
   attr_type_          = AttrType::FLOATS;
   value_.float_value_ = val;
   length_             = sizeof(val);
+}
+void Value::set_date(int val)
+{
+  reset();
+  attr_type_        = AttrType::DATES;
+  value_.int_value_ = val;
+  length_           = sizeof(val);
 }
 void Value::set_boolean(bool val)
 {
@@ -194,6 +205,9 @@ void Value::set_empty_string(int len)
 void Value::set_value(const Value &value)
 {
   switch (value.attr_type_) {
+    case AttrType::DATES: {
+      set_date(value.get_int());
+    } break;
     case AttrType::INTS: {
       set_int(value.get_int());
     } break;
@@ -250,6 +264,9 @@ int Value::compare(const Value &other) const { return DataType::type_instance(th
 int Value::get_int() const
 {
   switch (attr_type_) {
+    case AttrType::DATES: {
+      return value_.int_value_;
+    }
     case AttrType::CHARS: {
       try {
         return (int)(stol(value_.pointer_value_));
