@@ -21,19 +21,26 @@ class Db;
 class BinderContext
 {
 public:
-  explicit BinderContext(Db *db = nullptr) : db_(db) {}
+  explicit BinderContext(Db *db = nullptr, BinderContext *parent = nullptr) : db_(db), parent_(parent) {}
   virtual ~BinderContext() = default;
 
   void add_table(Table *table) { query_tables_.push_back(table); }
 
   Table *find_table(const char *table_name) const;
+  Table *find_table_in_outer_scope(const char *table_name, const BinderContext *&owner) const;
+  Table *find_field_in_outer_scope(const char *field_name, const BinderContext *&owner) const;
+  void add_correlated_value(
+      const shared_ptr<CorrelatedValue> &correlated_value, const BinderContext *owner);
 
   const vector<Table *> &query_tables() const { return query_tables_; }
+  const vector<shared_ptr<CorrelatedValue>> &correlated_values() const { return correlated_values_; }
   Db                    *db() const { return db_; }
 
 private:
-  vector<Table *> query_tables_;
-  Db             *db_ = nullptr;
+  vector<Table *>                     query_tables_;
+  vector<shared_ptr<CorrelatedValue>> correlated_values_;
+  Db                                 *db_     = nullptr;
+  BinderContext                      *parent_ = nullptr;
 };
 
 /**

@@ -68,6 +68,7 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, function<RC(unique_p
     case ExprType::UNBOUND_FIELD:
     case ExprType::UNBOUND_SUBQUERY:
     case ExprType::FIELD:
+    case ExprType::CORRELATED_FIELD:
     case ExprType::VALUE:
     case ExprType::SUBQUERY: {
       // Do nothing

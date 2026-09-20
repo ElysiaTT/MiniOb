@@ -23,6 +23,7 @@ See the Mulan PSL v2 for more details. */
 class Db;
 class Table;
 class FieldMeta;
+class BinderContext;
 
 struct FilterObj
 {
@@ -88,10 +89,11 @@ public:
 
 public:
   static RC create(Db *db, Table *default_table, unordered_map<string, Table *> *tables,
-      ConditionSqlNode *conditions, int condition_num, FilterStmt *&stmt);
+      ConditionSqlNode *conditions, int condition_num, FilterStmt *&stmt,
+      BinderContext *binder_context = nullptr);
 
   static RC create_filter_unit(Db *db, Table *default_table, unordered_map<string, Table *> *tables,
-      ConditionSqlNode &condition, FilterUnit *&filter_unit);
+      ConditionSqlNode &condition, FilterUnit *&filter_unit, BinderContext *binder_context = nullptr);
 
 private:
   vector<FilterUnit *> filter_units_;  // 默认当前都是AND关系

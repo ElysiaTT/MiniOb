@@ -25,6 +25,8 @@ See the Mulan PSL v2 for more details. */
 class Tuple;
 class ParsedSqlNode;
 class SelectStmt;
+class Session;
+class PhysicalOperator;
 
 /**
  * @defgroup Expression
@@ -44,9 +46,10 @@ enum class ExprType
   UNBOUND_SUBQUERY,     ///< 未绑定的子查询
 
   FIELD,        ///< 字段。在实际执行时，根据行数据内容提取对应字段的值
+  CORRELATED_FIELD,  ///< 关联子查询引用的外层字段
   VALUE,        ///< 常量值
   CAST,         ///< 需要做类型转换的表达式
-  SUBQUERY,     ///< 已绑定的非关联子查询
+  SUBQUERY,     ///< 已绑定的子查询
   COMPARISON,   ///< 需要做比较的表达式
   CONJUNCTION,  ///< 多个表达式使用同一种关系(AND或OR)来联结
   ARITHMETIC,   ///< 算术运算
@@ -225,6 +228,37 @@ private:
   Field field_;
 };
 
+struct CorrelatedValue
+{
+  explicit CorrelatedValue(const Field &field) : field(field) {}
+
+  Field field;
+  Value value;
+  bool  initialized = false;
+};
+
+/**
+ * @brief An outer-query field captured by a correlated subquery.
+ */
+class CorrelatedFieldExpr : public Expression
+{
+public:
+  explicit CorrelatedFieldExpr(shared_ptr<CorrelatedValue> state) : state_(std::move(state)) {}
+  ~CorrelatedFieldExpr() override = default;
+
+  unique_ptr<Expression> copy() const override { return make_unique<CorrelatedFieldExpr>(state_); }
+
+  ExprType type() const override { return ExprType::CORRELATED_FIELD; }
+  AttrType value_type() const override { return state_->field.attr_type(); }
+  int      value_length() const override { return state_->field.meta()->len(); }
+  RC       get_value(const Tuple &tuple, Value &value) const override;
+
+  const shared_ptr<CorrelatedValue> &state() const { return state_; }
+
+private:
+  shared_ptr<CorrelatedValue> state_;
+};
+
 /**
  * @brief 常量值表达式
  * @ingroup Expression
@@ -282,7 +316,8 @@ private:
 };
 
 /**
- * @brief A non-correlated subquery whose result is materialized once per SQL statement.
+ * @brief A subquery expression. Non-correlated results are materialized once;
+ * correlated results are refreshed for every outer tuple.
  */
 class SubqueryExpr : public Expression
 {
@@ -298,9 +333,14 @@ public:
   RC       get_value(const Tuple &tuple, Value &value) const override;
 
   SelectStmt          *statement() const;
+  bool                 correlated() const;
+  bool                 prepared() const;
   bool                 materialized() const;
   const vector<Value> &values() const;
   void                 set_values(vector<Value> values);
+  void set_correlated_plan(
+      unique_ptr<PhysicalOperator> physical_operator, Session *session, bool allow_multiple);
+  RC                   evaluate(const Tuple &outer_tuple) const;
 
 private:
   struct State;

@@ -32,6 +32,49 @@ Table *BinderContext::find_table(const char *table_name) const
   return *iter;
 }
 
+Table *BinderContext::find_table_in_outer_scope(const char *table_name, const BinderContext *&owner) const
+{
+  owner = nullptr;
+  for (const BinderContext *context = parent_; context != nullptr; context = context->parent_) {
+    Table *table = context->find_table(table_name);
+    if (table != nullptr) {
+      owner = context;
+      return table;
+    }
+  }
+  return nullptr;
+}
+
+Table *BinderContext::find_field_in_outer_scope(const char *field_name, const BinderContext *&owner) const
+{
+  owner = nullptr;
+  for (const BinderContext *context = parent_; context != nullptr; context = context->parent_) {
+    Table *matched_table = nullptr;
+    for (Table *table : context->query_tables_) {
+      if (table->table_meta().field(field_name) == nullptr) {
+        continue;
+      }
+      if (matched_table != nullptr) {
+        return nullptr;
+      }
+      matched_table = table;
+    }
+    if (matched_table != nullptr) {
+      owner = context;
+      return matched_table;
+    }
+  }
+  return nullptr;
+}
+
+void BinderContext::add_correlated_value(
+    const shared_ptr<CorrelatedValue> &correlated_value, const BinderContext *owner)
+{
+  for (BinderContext *context = this; context != nullptr && context != owner; context = context->parent_) {
+    context->correlated_values_.emplace_back(correlated_value);
+  }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 static void wildcard_fields(Table *table, bool include_table_name, vector<unique_ptr<Expression>> &expressions)
 {
@@ -69,6 +112,10 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
     } break;
 
     case ExprType::FIELD: {
+      return bind_field_expression(expr, bound_expressions);
+    } break;
+
+    case ExprType::CORRELATED_FIELD: {
       return bind_field_expression(expr, bound_expressions);
     } break;
 
@@ -161,11 +208,44 @@ RC ExpressionBinder::bind_unbound_field_expression(
     }
 
     table = context_.query_tables()[0];
+    if (table->table_meta().field(field_name) == nullptr) {
+      const BinderContext *owner = nullptr;
+      table = context_.find_field_in_outer_scope(field_name, owner);
+      if (table == nullptr) {
+        LOG_INFO("no such field in current or outer query: %s", field_name);
+        return RC::SCHEMA_FIELD_MISSING;
+      }
+
+      const FieldMeta *field_meta = table->table_meta().field(field_name);
+      auto correlated_value = make_shared<CorrelatedValue>(Field(table, field_meta));
+      context_.add_correlated_value(correlated_value, owner);
+      auto correlated_expr = make_unique<CorrelatedFieldExpr>(std::move(correlated_value));
+      correlated_expr->set_name(expr->name());
+      bound_expressions.emplace_back(std::move(correlated_expr));
+      return RC::SUCCESS;
+    }
   } else {
     table = context_.find_table(table_name);
     if (nullptr == table) {
-      LOG_INFO("no such table in from list: %s", table_name);
-      return RC::SCHEMA_TABLE_NOT_EXIST;
+      const BinderContext *owner = nullptr;
+      table = context_.find_table_in_outer_scope(table_name, owner);
+      if (table == nullptr) {
+        LOG_INFO("no such table in current or outer query: %s", table_name);
+        return RC::SCHEMA_TABLE_NOT_EXIST;
+      }
+
+      const FieldMeta *field_meta = table->table_meta().field(field_name);
+      if (field_meta == nullptr) {
+        LOG_INFO("no such field in outer table: %s.%s", table_name, field_name);
+        return RC::SCHEMA_FIELD_MISSING;
+      }
+
+      auto correlated_value = make_shared<CorrelatedValue>(Field(table, field_meta));
+      context_.add_correlated_value(correlated_value, owner);
+      auto correlated_expr = make_unique<CorrelatedFieldExpr>(std::move(correlated_value));
+      correlated_expr->set_name(expr->name());
+      bound_expressions.emplace_back(std::move(correlated_expr));
+      return RC::SUCCESS;
     }
   }
 
@@ -210,7 +290,8 @@ RC ExpressionBinder::bind_subquery_expression(
 
   auto *unbound_subquery = static_cast<UnboundSubqueryExpr *>(expr.get());
   Stmt *statement = nullptr;
-  RC rc = Stmt::create_stmt(context_.db(), unbound_subquery->sql_node(), statement);
+  RC rc = SelectStmt::create(
+      context_.db(), unbound_subquery->sql_node().selection, statement, &context_);
   if (OB_FAIL(rc)) {
     return rc;
   }

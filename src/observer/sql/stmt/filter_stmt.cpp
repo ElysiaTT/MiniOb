@@ -30,7 +30,7 @@ FilterStmt::~FilterStmt()
 }
 
 RC FilterStmt::create(Db *db, Table *default_table, unordered_map<string, Table *> *tables,
-    ConditionSqlNode *conditions, int condition_num, FilterStmt *&stmt)
+    ConditionSqlNode *conditions, int condition_num, FilterStmt *&stmt, BinderContext *binder_context)
 {
   RC rc = RC::SUCCESS;
   stmt  = nullptr;
@@ -39,7 +39,7 @@ RC FilterStmt::create(Db *db, Table *default_table, unordered_map<string, Table 
   for (int i = 0; i < condition_num; i++) {
     FilterUnit *filter_unit = nullptr;
 
-    rc = create_filter_unit(db, default_table, tables, conditions[i], filter_unit);
+    rc = create_filter_unit(db, default_table, tables, conditions[i], filter_unit, binder_context);
     if (rc != RC::SUCCESS) {
       delete tmp_stmt;
       LOG_WARN("failed to create filter unit. condition index=%d", i);
@@ -81,7 +81,7 @@ RC get_table_and_field(Db *db, Table *default_table, unordered_map<string, Table
 }
 
 RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<string, Table *> *tables,
-    ConditionSqlNode &condition, FilterUnit *&filter_unit)
+    ConditionSqlNode &condition, FilterUnit *&filter_unit, BinderContext *binder_context)
 {
   RC rc = RC::SUCCESS;
 
@@ -94,19 +94,20 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
   filter_unit = new FilterUnit;
 
   if (condition.left_expr && condition.right_expr) {
-    BinderContext binder_context(db);
-    if (tables != nullptr) {
+    BinderContext local_binder_context(db);
+    BinderContext &active_binder_context = binder_context == nullptr ? local_binder_context : *binder_context;
+    if (binder_context == nullptr && tables != nullptr) {
       unordered_set<Table *> added_tables;
       for (const auto &entry : *tables) {
         if (added_tables.insert(entry.second).second) {
-          binder_context.add_table(entry.second);
+          active_binder_context.add_table(entry.second);
         }
       }
-    } else if (default_table != nullptr) {
-      binder_context.add_table(default_table);
+    } else if (binder_context == nullptr && default_table != nullptr) {
+      active_binder_context.add_table(default_table);
     }
 
-    ExpressionBinder expression_binder(binder_context);
+    ExpressionBinder expression_binder(active_binder_context);
     vector<unique_ptr<Expression>> bound_expressions;
     rc = expression_binder.bind_expression(condition.left_expr, bound_expressions);
     if (OB_FAIL(rc) || bound_expressions.size() != 1) {

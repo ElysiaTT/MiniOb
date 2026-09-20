@@ -22,6 +22,8 @@ class FieldMeta;
 class FilterStmt;
 class Db;
 class Table;
+class BinderContext;
+struct CorrelatedValue;
 
 /**
  * @brief 表示select语句
@@ -36,7 +38,7 @@ public:
   StmtType type() const override { return StmtType::SELECT; }
 
 public:
-  static RC create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt);
+  static RC create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt, BinderContext *outer_context = nullptr);
 
 public:
   const vector<Table *> &tables() const { return tables_; }
@@ -46,12 +48,14 @@ public:
   vector<unique_ptr<Expression>> &group_by() { return group_by_; }
   vector<unique_ptr<Expression>> &order_by() { return order_by_; }
   const vector<bool>             &order_ascending() const { return order_ascending_; }
+  const vector<shared_ptr<CorrelatedValue>> &correlated_values() const { return correlated_values_; }
 
 private:
-  vector<unique_ptr<Expression>> query_expressions_;
-  vector<Table *>                tables_;
-  FilterStmt                    *filter_stmt_ = nullptr;
-  vector<unique_ptr<Expression>> group_by_;
-  vector<unique_ptr<Expression>> order_by_;
-  vector<bool>                   order_ascending_;
+  vector<unique_ptr<Expression>>        query_expressions_;
+  vector<Table *>                       tables_;
+  FilterStmt                           *filter_stmt_ = nullptr;
+  vector<unique_ptr<Expression>>        group_by_;
+  vector<unique_ptr<Expression>>        order_by_;
+  vector<bool>                          order_ascending_;
+  vector<shared_ptr<CorrelatedValue>> correlated_values_;
 };

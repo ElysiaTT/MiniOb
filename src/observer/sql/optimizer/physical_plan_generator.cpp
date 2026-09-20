@@ -59,7 +59,10 @@ static RC materialize_subqueries(Expression &expression, Session *session, bool 
 {
   if (expression.type() == ExprType::SUBQUERY) {
     auto &subquery = static_cast<SubqueryExpr &>(expression);
-    if (subquery.materialized()) {
+    if (subquery.correlated() && subquery.prepared()) {
+      return RC::SUCCESS;
+    }
+    if (!subquery.correlated() && subquery.materialized()) {
       return !allow_multiple && subquery.values().size() > 1 ? RC::INVALID_ARGUMENT : RC::SUCCESS;
     }
     if (session == nullptr || subquery.statement() == nullptr) {
@@ -80,6 +83,11 @@ static RC materialize_subqueries(Expression &expression, Session *session, bool 
     if (OB_FAIL(rc)) {
       LOG_WARN("failed to create subquery physical plan. rc=%s", strrc(rc));
       return rc;
+    }
+
+    if (subquery.correlated()) {
+      subquery.set_correlated_plan(std::move(physical_operator), session, allow_multiple);
+      return RC::SUCCESS;
     }
 
     Trx *trx = session->current_trx();

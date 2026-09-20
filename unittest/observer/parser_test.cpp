@@ -18,6 +18,16 @@ See the Mulan PSL v2 for more details. */
 
 using namespace std;
 
+TEST(ParserTest, nested_subquery_test)
+{
+  ParsedSqlResult result;
+  const char *sql =
+      "select id from csq_outer where score in "
+      "(select score from csq_inner where tag in "
+      "(select tag from csq_tags where enabled = 1)) order by id";
+  ASSERT_EQ(parse(sql, &result), RC::SUCCESS);
+}
+
 TEST(ParserTest, DISABLED_aggregation_test)
 {
   ParsedSqlResult result;

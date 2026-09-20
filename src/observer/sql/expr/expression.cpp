@@ -15,8 +15,11 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/expression.h"
 #include "sql/expr/tuple.h"
 #include "sql/expr/arithmetic_operator.hpp"
+#include "sql/operator/physical_operator.h"
 #include "sql/parser/parse_defs.h"
 #include "sql/stmt/select_stmt.h"
+#include "session/session.h"
+#include "storage/trx/trx.h"
 
 using namespace std;
 
@@ -46,6 +49,15 @@ RC FieldExpr::get_column(Chunk &chunk, Column &column)
   } else {
     column.reference(chunk.column(field().meta()->field_id()));
   }
+  return RC::SUCCESS;
+}
+
+RC CorrelatedFieldExpr::get_value(const Tuple &tuple, Value &value) const
+{
+  if (!state_->initialized) {
+    return RC::INTERNAL;
+  }
+  value = state_->value;
   return RC::SUCCESS;
 }
 
@@ -92,13 +104,22 @@ struct SubqueryExpr::State
 {
   State(unique_ptr<SelectStmt> statement, AttrType value_type, int value_length)
       : statement(std::move(statement)), value_type(value_type), value_length(value_length)
-  {}
+  {
+    if (this->statement != nullptr) {
+      correlated_values = this->statement->correlated_values();
+    }
+  }
 
-  unique_ptr<SelectStmt> statement;
-  vector<Value>          values;
-  AttrType               value_type   = AttrType::UNDEFINED;
-  int                    value_length = -1;
-  bool                   materialized = false;
+  unique_ptr<SelectStmt>              statement;
+  unique_ptr<PhysicalOperator>        physical_operator;
+  Session                            *session = nullptr;
+  vector<shared_ptr<CorrelatedValue>> correlated_values;
+  vector<Value>                       values;
+  AttrType                            value_type     = AttrType::UNDEFINED;
+  int                                 value_length   = -1;
+  bool                                prepared       = false;
+  bool                                materialized   = false;
+  bool                                allow_multiple = false;
 };
 
 SubqueryExpr::SubqueryExpr(unique_ptr<SelectStmt> statement, AttrType value_type, int value_length)
@@ -129,6 +150,10 @@ RC SubqueryExpr::get_value(const Tuple &tuple, Value &value) const
 
 SelectStmt *SubqueryExpr::statement() const { return state_->statement.get(); }
 
+bool SubqueryExpr::correlated() const { return !state_->correlated_values.empty(); }
+
+bool SubqueryExpr::prepared() const { return state_->prepared; }
+
 bool SubqueryExpr::materialized() const { return state_->materialized; }
 
 const vector<Value> &SubqueryExpr::values() const { return state_->values; }
@@ -137,6 +162,80 @@ void SubqueryExpr::set_values(vector<Value> values)
 {
   state_->values       = std::move(values);
   state_->materialized = true;
+}
+
+void SubqueryExpr::set_correlated_plan(
+    unique_ptr<PhysicalOperator> physical_operator, Session *session, bool allow_multiple)
+{
+  state_->physical_operator = std::move(physical_operator);
+  state_->session           = session;
+  state_->allow_multiple    = allow_multiple;
+  state_->prepared          = true;
+}
+
+RC SubqueryExpr::evaluate(const Tuple &outer_tuple) const
+{
+  if (!correlated()) {
+    return state_->materialized ? RC::SUCCESS : RC::INTERNAL;
+  }
+  if (!state_->prepared || state_->physical_operator == nullptr || state_->session == nullptr) {
+    return RC::INTERNAL;
+  }
+
+  for (const shared_ptr<CorrelatedValue> &correlated_value : state_->correlated_values) {
+    Value         value;
+    TupleCellSpec spec(correlated_value->field.table_name(), correlated_value->field.field_name());
+    RC            rc = outer_tuple.find_cell(spec, value);
+    if (OB_SUCC(rc)) {
+      correlated_value->value       = std::move(value);
+      correlated_value->initialized = true;
+    } else if (!correlated_value->initialized) {
+      LOG_WARN("failed to resolve correlated field %s.%s from outer tuple",
+          correlated_value->field.table_name(), correlated_value->field.field_name());
+      return rc;
+    }
+  }
+
+  Trx *trx = state_->session->current_trx();
+  RC   rc  = state_->physical_operator->open(trx);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  vector<Value> values;
+  while (OB_SUCC(rc = state_->physical_operator->next())) {
+    Tuple *tuple = state_->physical_operator->current_tuple();
+    if (tuple == nullptr || tuple->cell_num() != 1) {
+      rc = RC::INVALID_ARGUMENT;
+      break;
+    }
+
+    Value value;
+    rc = tuple->cell_at(0, value);
+    if (OB_FAIL(rc)) {
+      break;
+    }
+    values.emplace_back(std::move(value));
+  }
+  if (rc == RC::RECORD_EOF) {
+    rc = RC::SUCCESS;
+  }
+
+  RC close_rc = state_->physical_operator->close();
+  if (OB_SUCC(rc) && OB_FAIL(close_rc)) {
+    rc = close_rc;
+  }
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  state_->values       = std::move(values);
+  state_->materialized = true;
+  if (!state_->allow_multiple && state_->values.size() > 1) {
+    LOG_WARN("scalar correlated subquery returned more than one row");
+    return RC::INVALID_ARGUMENT;
+  }
+  return RC::SUCCESS;
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -302,6 +401,19 @@ RC ComparisonExpr::get_value(const Tuple &tuple, Value &value) const
       left_->type() == ExprType::SUBQUERY ? static_cast<const SubqueryExpr *>(left_.get()) : nullptr;
   const SubqueryExpr *right_subquery =
       right_->type() == ExprType::SUBQUERY ? static_cast<const SubqueryExpr *>(right_.get()) : nullptr;
+
+  if (left_subquery != nullptr && left_subquery->correlated()) {
+    RC rc = left_subquery->evaluate(tuple);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  }
+  if (right_subquery != nullptr && right_subquery->correlated()) {
+    RC rc = right_subquery->evaluate(tuple);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  }
 
   if (comp_ == IN_OP || comp_ == NOT_IN_OP) {
     if (left_subquery != nullptr || right_subquery == nullptr || !right_subquery->materialized()) {
