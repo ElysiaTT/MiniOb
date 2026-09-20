@@ -46,10 +46,111 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/table_scan_vec_physical_operator.h"
 #include "sql/operator/update_logical_operator.h"
 #include "sql/operator/update_physical_operator.h"
+#include "sql/expr/expression_iterator.h"
+#include "sql/optimizer/logical_plan_generator.h"
 #include "sql/optimizer/physical_plan_generator.h"
+#include "sql/stmt/select_stmt.h"
 #include "storage/index/index.h"
+#include "storage/trx/trx.h"
 
 using namespace std;
+
+static RC materialize_subqueries(Expression &expression, Session *session, bool allow_multiple = false)
+{
+  if (expression.type() == ExprType::SUBQUERY) {
+    auto &subquery = static_cast<SubqueryExpr &>(expression);
+    if (subquery.materialized()) {
+      return !allow_multiple && subquery.values().size() > 1 ? RC::INVALID_ARGUMENT : RC::SUCCESS;
+    }
+    if (session == nullptr || subquery.statement() == nullptr) {
+      return RC::INVALID_ARGUMENT;
+    }
+
+    LogicalPlanGenerator        logical_plan_generator;
+    unique_ptr<LogicalOperator> logical_operator;
+    RC rc = logical_plan_generator.create(subquery.statement(), logical_operator);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to create subquery logical plan. rc=%s", strrc(rc));
+      return rc;
+    }
+
+    PhysicalPlanGenerator        physical_plan_generator;
+    unique_ptr<PhysicalOperator> physical_operator;
+    rc = physical_plan_generator.create(*logical_operator, physical_operator, session);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to create subquery physical plan. rc=%s", strrc(rc));
+      return rc;
+    }
+
+    Trx *trx = session->current_trx();
+    rc = trx->start_if_need();
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    rc = physical_operator->open(trx);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+
+    vector<Value> values;
+    while (OB_SUCC(rc = physical_operator->next())) {
+      Tuple *tuple = physical_operator->current_tuple();
+      if (tuple == nullptr || tuple->cell_num() != 1) {
+        rc = RC::INVALID_ARGUMENT;
+        break;
+      }
+
+      Value value;
+      rc = tuple->cell_at(0, value);
+      if (OB_FAIL(rc)) {
+        break;
+      }
+      values.emplace_back(std::move(value));
+    }
+    if (rc == RC::RECORD_EOF) {
+      rc = RC::SUCCESS;
+    }
+
+    RC close_rc = physical_operator->close();
+    if (OB_SUCC(rc) && OB_FAIL(close_rc)) {
+      rc = close_rc;
+    }
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+
+    subquery.set_values(std::move(values));
+    if (!allow_multiple && subquery.values().size() > 1) {
+      LOG_WARN("scalar subquery returned more than one row");
+      return RC::INVALID_ARGUMENT;
+    }
+    return RC::SUCCESS;
+  }
+
+  if (expression.type() == ExprType::COMPARISON) {
+    auto &comparison = static_cast<ComparisonExpr &>(expression);
+    RC rc = materialize_subqueries(*comparison.left(), session, false);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    const bool list_subquery = comparison.comp() == IN_OP || comparison.comp() == NOT_IN_OP;
+    return materialize_subqueries(*comparison.right(), session, list_subquery);
+  }
+
+  return ExpressionIterator::iterate_child_expr(expression,
+      [session](unique_ptr<Expression> &child) { return materialize_subqueries(*child, session, false); });
+}
+
+static RC materialize_subqueries(vector<unique_ptr<Expression>> &expressions, Session *session)
+{
+  for (unique_ptr<Expression> &expression : expressions) {
+    RC rc = materialize_subqueries(*expression, session);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  }
+  return RC::SUCCESS;
+}
 
 RC PhysicalPlanGenerator::create(LogicalOperator &logical_operator, unique_ptr<PhysicalOperator> &oper, Session* session)
 {
@@ -136,6 +237,10 @@ RC PhysicalPlanGenerator::create_vec(LogicalOperator &logical_operator, unique_p
 RC PhysicalPlanGenerator::create_plan(TableGetLogicalOperator &table_get_oper, unique_ptr<PhysicalOperator> &oper, Session* session)
 {
   vector<unique_ptr<Expression>> &predicates = table_get_oper.predicates();
+  RC rc = materialize_subqueries(predicates, session);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
   // 看看是否有可以用于索引查找的表达式
   Table *table = table_get_oper.table();
 
@@ -245,7 +350,7 @@ RC PhysicalPlanGenerator::create_plan(TableGetLogicalOperator &table_get_oper, u
     if (composite_key.empty()) {
       ASSERT(value_expr != nullptr, "got an index but value expr is null ?");
       vector<Value> values{value_expr->get_value()};
-      RC rc = index->make_key(values, composite_key);
+      rc = index->make_key(values, composite_key);
       if (OB_FAIL(rc)) {
         return rc;
       }
@@ -288,6 +393,11 @@ RC PhysicalPlanGenerator::create_plan(PredicateLogicalOperator &pred_oper, uniqu
   vector<unique_ptr<Expression>> &expressions = pred_oper.expressions();
   ASSERT(expressions.size() == 1, "predicate logical operator's children should be 1");
 
+  rc = materialize_subqueries(expressions, session);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
   unique_ptr<Expression> expression = std::move(expressions.front());
   oper = unique_ptr<PhysicalOperator>(new PredicatePhysicalOperator(std::move(expression)));
   oper->add_child(std::move(child_phy_oper));
@@ -300,7 +410,10 @@ RC PhysicalPlanGenerator::create_plan(ProjectLogicalOperator &project_oper, uniq
 
   unique_ptr<PhysicalOperator> child_phy_oper;
 
-  RC rc = RC::SUCCESS;
+  RC rc = materialize_subqueries(project_oper.expressions(), session);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
   if (!child_opers.empty()) {
     LogicalOperator *child_oper = child_opers.front().get();
 
@@ -436,7 +549,10 @@ bool PhysicalPlanGenerator::can_use_hash_join(JoinLogicalOperator &join_oper)
 
 RC PhysicalPlanGenerator::create_plan(CalcLogicalOperator &logical_oper, unique_ptr<PhysicalOperator> &oper, Session* session)
 {
-  RC rc = RC::SUCCESS;
+  RC rc = materialize_subqueries(logical_oper.expressions(), session);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
 
   CalcPhysicalOperator *calc_oper = new CalcPhysicalOperator(std::move(logical_oper.expressions()));
   oper.reset(calc_oper);
@@ -477,8 +593,13 @@ RC PhysicalPlanGenerator::create_plan(OrderByLogicalOperator &logical_oper,
 {
   ASSERT(logical_oper.children().size() == 1, "order by operator should have 1 child");
 
+  RC rc = materialize_subqueries(logical_oper.order_by_expressions(), session);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
   unique_ptr<PhysicalOperator> child_physical_oper;
-  RC rc = create(*logical_oper.children().front(), child_physical_oper, session);
+  rc = create(*logical_oper.children().front(), child_physical_oper, session);
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to create child physical operator of order by. rc=%s", strrc(rc));
     return rc;
@@ -494,6 +615,10 @@ RC PhysicalPlanGenerator::create_plan(OrderByLogicalOperator &logical_oper,
 RC PhysicalPlanGenerator::create_vec_plan(TableGetLogicalOperator &table_get_oper, unique_ptr<PhysicalOperator> &oper, Session* session)
 {
   vector<unique_ptr<Expression>> &predicates = table_get_oper.predicates();
+  RC rc = materialize_subqueries(predicates, session);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
   Table *table = table_get_oper.table();
   TableScanVecPhysicalOperator *table_scan_oper = new TableScanVecPhysicalOperator(table, table_get_oper.read_write_mode());
   table_scan_oper->set_predicates(std::move(predicates));
@@ -539,7 +664,10 @@ RC PhysicalPlanGenerator::create_vec_plan(ProjectLogicalOperator &project_oper, 
 
   unique_ptr<PhysicalOperator> child_phy_oper;
 
-  RC rc = RC::SUCCESS;
+  RC rc = materialize_subqueries(project_oper.expressions(), session);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
   if (!child_opers.empty()) {
     LogicalOperator *child_oper = child_opers.front().get();
     rc                          = create_vec(*child_oper, child_phy_oper, session);

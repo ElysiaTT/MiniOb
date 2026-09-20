@@ -17,6 +17,8 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/ranges.h"
 #include "sql/parser/expression_binder.h"
 #include "sql/expr/expression_iterator.h"
+#include "sql/stmt/select_stmt.h"
+#include "sql/stmt/stmt.h"
 
 using namespace common;
 
@@ -62,12 +64,21 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
       return bind_aggregate_expression(expr, bound_expressions);
     } break;
 
+    case ExprType::UNBOUND_SUBQUERY: {
+      return bind_subquery_expression(expr, bound_expressions);
+    } break;
+
     case ExprType::FIELD: {
       return bind_field_expression(expr, bound_expressions);
     } break;
 
     case ExprType::VALUE: {
       return bind_value_expression(expr, bound_expressions);
+    } break;
+
+    case ExprType::SUBQUERY: {
+      bound_expressions.emplace_back(std::move(expr));
+      return RC::SUCCESS;
     } break;
 
     case ExprType::CAST: {
@@ -187,6 +198,39 @@ RC ExpressionBinder::bind_value_expression(
     unique_ptr<Expression> &value_expr, vector<unique_ptr<Expression>> &bound_expressions)
 {
   bound_expressions.emplace_back(std::move(value_expr));
+  return RC::SUCCESS;
+}
+
+RC ExpressionBinder::bind_subquery_expression(
+    unique_ptr<Expression> &expr, vector<unique_ptr<Expression>> &bound_expressions)
+{
+  if (expr == nullptr || context_.db() == nullptr) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  auto *unbound_subquery = static_cast<UnboundSubqueryExpr *>(expr.get());
+  Stmt *statement = nullptr;
+  RC rc = Stmt::create_stmt(context_.db(), unbound_subquery->sql_node(), statement);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  unique_ptr<Stmt> statement_guard(statement);
+  if (statement == nullptr || statement->type() != StmtType::SELECT) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  unique_ptr<SelectStmt> select_stmt(static_cast<SelectStmt *>(statement_guard.release()));
+  vector<unique_ptr<Expression>> &query_expressions = select_stmt->query_expressions();
+  if (query_expressions.size() != 1) {
+    LOG_WARN("subquery must return exactly one column, but got %zu", query_expressions.size());
+    return RC::INVALID_ARGUMENT;
+  }
+
+  const AttrType value_type   = query_expressions.front()->value_type();
+  const int      value_length = query_expressions.front()->value_length();
+  auto subquery_expr = make_unique<SubqueryExpr>(std::move(select_stmt), value_type, value_length);
+  subquery_expr->set_name(expr->name());
+  bound_expressions.emplace_back(std::move(subquery_expr));
   return RC::SUCCESS;
 }
 

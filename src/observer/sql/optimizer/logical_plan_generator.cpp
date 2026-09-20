@@ -277,7 +277,9 @@ RC LogicalPlanGenerator::create_comparison_expression(
                                          : static_cast<Expression *>(new ValueExpr(filter_obj_right.value)));
   }
 
-  if (left->value_type() != right->value_type()) {
+  const bool has_subquery = left->type() == ExprType::SUBQUERY || right->type() == ExprType::SUBQUERY;
+  if (!has_subquery && filter_unit->comp() != IN_OP && filter_unit->comp() != NOT_IN_OP &&
+      left->value_type() != right->value_type()) {
     auto left_to_right_cost = implicit_cast_cost(left->value_type(), right->value_type());
     auto right_to_left_cost = implicit_cast_cost(right->value_type(), left->value_type());
     if (left_to_right_cost <= right_to_left_cost && left_to_right_cost != INT32_MAX) {

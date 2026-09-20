@@ -15,6 +15,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/expression.h"
 #include "sql/expr/tuple.h"
 #include "sql/expr/arithmetic_operator.hpp"
+#include "sql/parser/parse_defs.h"
+#include "sql/stmt/select_stmt.h"
 
 using namespace std;
 
@@ -69,6 +71,72 @@ RC ValueExpr::get_column(Chunk &chunk, Column &column)
 {
   column.init(value_, chunk.rows());
   return RC::SUCCESS;
+}
+
+/////////////////////////////////////////////////////////////////////////////////
+
+UnboundSubqueryExpr::UnboundSubqueryExpr(ParsedSqlNode *sql_node) : sql_node_(sql_node) {}
+
+UnboundSubqueryExpr::~UnboundSubqueryExpr() = default;
+
+unique_ptr<Expression> UnboundSubqueryExpr::copy() const
+{
+  auto expression = make_unique<UnboundSubqueryExpr>(nullptr);
+  expression->sql_node_ = sql_node_;
+  return expression;
+}
+
+ParsedSqlNode &UnboundSubqueryExpr::sql_node() const { return *sql_node_; }
+
+struct SubqueryExpr::State
+{
+  State(unique_ptr<SelectStmt> statement, AttrType value_type, int value_length)
+      : statement(std::move(statement)), value_type(value_type), value_length(value_length)
+  {}
+
+  unique_ptr<SelectStmt> statement;
+  vector<Value>          values;
+  AttrType               value_type   = AttrType::UNDEFINED;
+  int                    value_length = -1;
+  bool                   materialized = false;
+};
+
+SubqueryExpr::SubqueryExpr(unique_ptr<SelectStmt> statement, AttrType value_type, int value_length)
+    : state_(make_shared<State>(std::move(statement), value_type, value_length))
+{}
+
+SubqueryExpr::SubqueryExpr(shared_ptr<State> state) : state_(std::move(state)) {}
+
+SubqueryExpr::~SubqueryExpr() = default;
+
+unique_ptr<Expression> SubqueryExpr::copy() const { return unique_ptr<Expression>(new SubqueryExpr(state_)); }
+
+AttrType SubqueryExpr::value_type() const { return state_->value_type; }
+
+int SubqueryExpr::value_length() const { return state_->value_length; }
+
+RC SubqueryExpr::get_value(const Tuple &tuple, Value &value) const
+{
+  if (!state_->materialized) {
+    return RC::INTERNAL;
+  }
+  if (state_->values.size() != 1) {
+    return state_->values.empty() ? RC::EMPTY : RC::INVALID_ARGUMENT;
+  }
+  value = state_->values.front();
+  return RC::SUCCESS;
+}
+
+SelectStmt *SubqueryExpr::statement() const { return state_->statement.get(); }
+
+bool SubqueryExpr::materialized() const { return state_->materialized; }
+
+const vector<Value> &SubqueryExpr::values() const { return state_->values; }
+
+void SubqueryExpr::set_values(vector<Value> values)
+{
+  state_->values       = std::move(values);
+  state_->materialized = true;
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -139,11 +207,42 @@ ComparisonExpr::ComparisonExpr(CompOp comp, unique_ptr<Expression> left, unique_
 
 ComparisonExpr::~ComparisonExpr() {}
 
+static RC compare_scalar_values(const Value &left, const Value &right, int &result)
+{
+  if (left.attr_type() == right.attr_type() ||
+      (is_numerical_type(left.attr_type()) && is_numerical_type(right.attr_type()))) {
+    result = left.compare(right);
+    return RC::SUCCESS;
+  }
+
+  const int left_to_right_cost =
+      DataType::type_instance(left.attr_type())->cast_cost(right.attr_type());
+  const int right_to_left_cost =
+      DataType::type_instance(right.attr_type())->cast_cost(left.attr_type());
+  Value cast_value;
+  RC    rc = RC::UNSUPPORTED;
+  if (left_to_right_cost <= right_to_left_cost && left_to_right_cost != INT32_MAX) {
+    rc = Value::cast_to(left, right.attr_type(), cast_value);
+    if (OB_SUCC(rc)) {
+      result = cast_value.compare(right);
+    }
+  } else if (right_to_left_cost != INT32_MAX) {
+    rc = Value::cast_to(right, left.attr_type(), cast_value);
+    if (OB_SUCC(rc)) {
+      result = left.compare(cast_value);
+    }
+  }
+  return rc;
+}
+
 RC ComparisonExpr::compare_value(const Value &left, const Value &right, bool &result) const
 {
-  RC  rc         = RC::SUCCESS;
-  int cmp_result = left.compare(right);
-  result         = false;
+  int cmp_result = 0;
+  RC  rc         = compare_scalar_values(left, right, cmp_result);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  result = false;
   switch (comp_) {
     case EQUAL_TO: {
       result = (0 == cmp_result);
@@ -163,6 +262,10 @@ RC ComparisonExpr::compare_value(const Value &left, const Value &right, bool &re
     case GREAT_THAN: {
       result = (cmp_result > 0);
     } break;
+    case IN_OP:
+    case NOT_IN_OP: {
+      return RC::INVALID_ARGUMENT;
+    }
     default: {
       LOG_WARN("unsupported comparison. %d", comp_);
       rc = RC::INTERNAL;
@@ -195,6 +298,55 @@ RC ComparisonExpr::try_get_value(Value &cell) const
 
 RC ComparisonExpr::get_value(const Tuple &tuple, Value &value) const
 {
+  const SubqueryExpr *left_subquery =
+      left_->type() == ExprType::SUBQUERY ? static_cast<const SubqueryExpr *>(left_.get()) : nullptr;
+  const SubqueryExpr *right_subquery =
+      right_->type() == ExprType::SUBQUERY ? static_cast<const SubqueryExpr *>(right_.get()) : nullptr;
+
+  if (comp_ == IN_OP || comp_ == NOT_IN_OP) {
+    if (left_subquery != nullptr || right_subquery == nullptr || !right_subquery->materialized()) {
+      return RC::INVALID_ARGUMENT;
+    }
+
+    Value left_value;
+    RC    rc = left_->get_value(tuple, left_value);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+
+    bool found = false;
+    for (const Value &candidate : right_subquery->values()) {
+      int comparison = 0;
+      rc = compare_scalar_values(left_value, candidate, comparison);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      if (comparison == 0) {
+        found = true;
+        break;
+      }
+    }
+    value.set_boolean(comp_ == IN_OP ? found : !found);
+    return RC::SUCCESS;
+  }
+
+  if (left_subquery != nullptr || right_subquery != nullptr) {
+    if ((left_subquery != nullptr && !left_subquery->materialized()) ||
+        (right_subquery != nullptr && !right_subquery->materialized())) {
+      return RC::INTERNAL;
+    }
+    if ((left_subquery != nullptr && right_subquery != nullptr) ||
+        (left_subquery != nullptr && left_subquery->values().size() > 1) ||
+        (right_subquery != nullptr && right_subquery->values().size() > 1)) {
+      return RC::INVALID_ARGUMENT;
+    }
+    if ((left_subquery != nullptr && left_subquery->values().empty()) ||
+        (right_subquery != nullptr && right_subquery->values().empty())) {
+      value.set_boolean(false);
+      return RC::SUCCESS;
+    }
+  }
+
   Value left_value;
   Value right_value;
 

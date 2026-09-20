@@ -103,6 +103,8 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         FROM
         WHERE
         AND
+        NOT
+        IN
         SET
         ON
         LOAD
@@ -162,6 +164,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %destructor { delete $$; } <from_clause>
 // %destructor { delete $$; } <rel_attr_list>
 %destructor { delete $$; } <key_list>
+%destructor { delete $$; } <sql_node>
 
 %token <number> NUMBER
 %token <floats> FLOAT
@@ -230,6 +233,7 @@ commands: command_wrapper opt_semicolon  //commands or sqls. parser starts here.
   {
     unique_ptr<ParsedSqlNode> sql_node = unique_ptr<ParsedSqlNode>($1);
     sql_result->add_sql_node(std::move(sql_node));
+    $$ = nullptr;
   }
   ;
 
@@ -623,6 +627,10 @@ expression:
       $$ = $2;
       $$->set_name(token_name(sql_string, &@$));
     }
+    | LBRACE select_stmt RBRACE {
+      $$ = new UnboundSubqueryExpr($2);
+      $$->set_name(token_name(sql_string, &@$));
+    }
     | '-' expression %prec UMINUS {
       $$ = create_arithmetic_expression(ArithmeticExpr::Type::NEGATIVE, $2, nullptr, sql_string, &@$);
     }
@@ -714,6 +722,8 @@ comp_op:
     | LE { $$ = LESS_EQUAL; }
     | GE { $$ = GREAT_EQUAL; }
     | NE { $$ = NOT_EQUAL; }
+    | IN { $$ = IN_OP; }
+    | NOT IN { $$ = NOT_IN_OP; }
     ;
 
 // your code here

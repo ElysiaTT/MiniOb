@@ -94,7 +94,7 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
   filter_unit = new FilterUnit;
 
   if (condition.left_expr && condition.right_expr) {
-    BinderContext binder_context;
+    BinderContext binder_context(db);
     if (tables != nullptr) {
       unordered_set<Table *> added_tables;
       for (const auto &entry : *tables) {
@@ -124,6 +124,26 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
       return OB_FAIL(rc) ? rc : RC::INVALID_ARGUMENT;
     }
     filter_unit->set_right_expression(std::move(bound_expressions.front()));
+    if ((comp == IN_OP || comp == NOT_IN_OP) &&
+        (filter_unit->left_expression()->type() == ExprType::SUBQUERY ||
+            filter_unit->right_expression()->type() != ExprType::SUBQUERY)) {
+      delete filter_unit;
+      filter_unit = nullptr;
+      LOG_WARN("IN and NOT IN require a scalar expression and a one-column subquery");
+      return RC::INVALID_ARGUMENT;
+    }
+    const bool has_subquery = filter_unit->left_expression()->type() == ExprType::SUBQUERY ||
+                              filter_unit->right_expression()->type() == ExprType::SUBQUERY;
+    const AttrType left_type  = filter_unit->left_expression()->value_type();
+    const AttrType right_type = filter_unit->right_expression()->value_type();
+    if (has_subquery && left_type != right_type &&
+        DataType::type_instance(left_type)->cast_cost(right_type) == INT32_MAX &&
+        DataType::type_instance(right_type)->cast_cost(left_type) == INT32_MAX) {
+      delete filter_unit;
+      filter_unit = nullptr;
+      LOG_WARN("subquery result type cannot be compared with the outer expression");
+      return RC::UNSUPPORTED;
+    }
     filter_unit->set_comp(comp);
     return RC::SUCCESS;
   }

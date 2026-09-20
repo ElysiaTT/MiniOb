@@ -38,7 +38,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     return RC::INVALID_ARGUMENT;
   }
 
-  BinderContext binder_context;
+  BinderContext binder_context(db);
 
   // collect tables in `from` statement
   vector<Table *>                tables;

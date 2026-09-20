@@ -23,6 +23,8 @@ See the Mulan PSL v2 for more details. */
 #include "storage/common/chunk.h"
 
 class Tuple;
+class ParsedSqlNode;
+class SelectStmt;
 
 /**
  * @defgroup Expression
@@ -39,10 +41,12 @@ enum class ExprType
   STAR,                 ///< 星号，表示所有字段
   UNBOUND_FIELD,        ///< 未绑定的字段，需要在resolver阶段解析为FieldExpr
   UNBOUND_AGGREGATION,  ///< 未绑定的聚合函数，需要在resolver阶段解析为AggregateExpr
+  UNBOUND_SUBQUERY,     ///< 未绑定的子查询
 
   FIELD,        ///< 字段。在实际执行时，根据行数据内容提取对应字段的值
   VALUE,        ///< 常量值
   CAST,         ///< 需要做类型转换的表达式
+  SUBQUERY,     ///< 已绑定的非关联子查询
   COMPARISON,   ///< 需要做比较的表达式
   CONJUNCTION,  ///< 多个表达式使用同一种关系(AND或OR)来联结
   ARITHMETIC,   ///< 算术运算
@@ -254,6 +258,55 @@ public:
 
 private:
   Value value_;
+};
+
+/**
+ * @brief A parsed subquery before its tables and fields have been bound.
+ */
+class UnboundSubqueryExpr : public Expression
+{
+public:
+  explicit UnboundSubqueryExpr(ParsedSqlNode *sql_node);
+  ~UnboundSubqueryExpr() override;
+
+  unique_ptr<Expression> copy() const override;
+
+  ExprType type() const override { return ExprType::UNBOUND_SUBQUERY; }
+  AttrType value_type() const override { return AttrType::UNDEFINED; }
+  RC       get_value(const Tuple &tuple, Value &value) const override { return RC::INTERNAL; }
+
+  ParsedSqlNode &sql_node() const;
+
+private:
+  shared_ptr<ParsedSqlNode> sql_node_;
+};
+
+/**
+ * @brief A non-correlated subquery whose result is materialized once per SQL statement.
+ */
+class SubqueryExpr : public Expression
+{
+public:
+  SubqueryExpr(unique_ptr<SelectStmt> statement, AttrType value_type, int value_length);
+  ~SubqueryExpr() override;
+
+  unique_ptr<Expression> copy() const override;
+
+  ExprType type() const override { return ExprType::SUBQUERY; }
+  AttrType value_type() const override;
+  int      value_length() const override;
+  RC       get_value(const Tuple &tuple, Value &value) const override;
+
+  SelectStmt          *statement() const;
+  bool                 materialized() const;
+  const vector<Value> &values() const;
+  void                 set_values(vector<Value> values);
+
+private:
+  struct State;
+  explicit SubqueryExpr(shared_ptr<State> state);
+
+  shared_ptr<State> state_;
 };
 
 /**

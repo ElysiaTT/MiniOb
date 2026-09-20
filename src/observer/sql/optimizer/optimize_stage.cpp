@@ -22,13 +22,56 @@ See the Mulan PSL v2 for more details. */
 #include "common/log/log.h"
 #include "event/session_event.h"
 #include "event/sql_event.h"
+#include "sql/expr/expression_iterator.h"
 #include "sql/operator/logical_operator.h"
+#include "sql/operator/table_get_logical_operator.h"
 #include "sql/stmt/stmt.h"
 #include "sql/optimizer/cascade/optimizer.h"
 #include "sql/optimizer/optimizer_utils.h"
 
 using namespace std;
 using namespace common;
+
+static bool expression_contains_subquery(Expression &expression)
+{
+  if (expression.type() == ExprType::SUBQUERY || expression.type() == ExprType::UNBOUND_SUBQUERY) {
+    return true;
+  }
+
+  bool contains_subquery = false;
+  ExpressionIterator::iterate_child_expr(expression, [&contains_subquery](unique_ptr<Expression> &child) {
+    if (!contains_subquery) {
+      contains_subquery = expression_contains_subquery(*child);
+    }
+    return RC::SUCCESS;
+  });
+  return contains_subquery;
+}
+
+static bool logical_plan_contains_subquery(LogicalOperator &logical_operator)
+{
+  for (unique_ptr<Expression> &expression : logical_operator.expressions()) {
+    if (expression_contains_subquery(*expression)) {
+      return true;
+    }
+  }
+
+  if (logical_operator.type() == LogicalOperatorType::TABLE_GET) {
+    auto &table_get = static_cast<TableGetLogicalOperator &>(logical_operator);
+    for (unique_ptr<Expression> &predicate : table_get.predicates()) {
+      if (expression_contains_subquery(*predicate)) {
+        return true;
+      }
+    }
+  }
+
+  for (unique_ptr<LogicalOperator> &child : logical_operator.children()) {
+    if (logical_plan_contains_subquery(*child)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 RC OptimizeStage::handle_request(SQLStageEvent *sql_event)
 {
@@ -89,7 +132,9 @@ RC OptimizeStage::generate_physical_plan(
     unique_ptr<LogicalOperator> &logical_operator, unique_ptr<PhysicalOperator> &physical_operator, Session *session)
 {
   RC rc = RC::SUCCESS;
-  if (session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR && LogicalOperator::can_generate_vectorized_operator(logical_operator->type())) {
+  if (session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR &&
+      LogicalOperator::can_generate_vectorized_operator(logical_operator->type()) &&
+      !logical_plan_contains_subquery(*logical_operator)) {
     LOG_TRACE("use chunk iterator");
     session->set_used_chunk_mode(true);
     rc    = physical_plan_generator_.create_vec(*logical_operator, physical_operator, session);
