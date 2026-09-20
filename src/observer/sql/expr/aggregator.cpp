@@ -25,12 +25,80 @@ RC SumAggregator::accumulate(const Value &value)
   ASSERT(value.attr_type() == value_.attr_type(), "type mismatch. value type: %s, value_.type: %s", 
         attr_type_to_string(value.attr_type()), attr_type_to_string(value_.attr_type()));
   
-  Value::add(value, value_, value_);
+  return Value::add(value, value_, value_);
+}
+
+RC SumAggregator::evaluate(Value &result)
+{
+  result = value_;
   return RC::SUCCESS;
 }
 
-RC SumAggregator::evaluate(Value& result)
+RC CountAggregator::accumulate(const Value &value)
 {
+  count_++;
+  return RC::SUCCESS;
+}
+
+RC CountAggregator::evaluate(Value &result)
+{
+  result.set_int(count_);
+  return RC::SUCCESS;
+}
+
+RC AvgAggregator::accumulate(const Value &value)
+{
+  switch (value.attr_type()) {
+    case AttrType::INTS: sum_ += value.get_int(); break;
+    case AttrType::FLOATS: sum_ += value.get_float(); break;
+    default:
+      LOG_WARN("unsupported value type for avg: %s", attr_type_to_string(value.attr_type()));
+      return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+  }
+
+  count_++;
+  return RC::SUCCESS;
+}
+
+RC AvgAggregator::evaluate(Value &result)
+{
+  if (count_ == 0) {
+    return RC::EMPTY;
+  }
+  result.set_float(static_cast<float>(sum_ / count_));
+  return RC::SUCCESS;
+}
+
+RC MinAggregator::accumulate(const Value &value)
+{
+  if (value_.attr_type() == AttrType::UNDEFINED || value.compare(value_) < 0) {
+    value_ = value;
+  }
+  return RC::SUCCESS;
+}
+
+RC MinAggregator::evaluate(Value &result)
+{
+  if (value_.attr_type() == AttrType::UNDEFINED) {
+    return RC::EMPTY;
+  }
+  result = value_;
+  return RC::SUCCESS;
+}
+
+RC MaxAggregator::accumulate(const Value &value)
+{
+  if (value_.attr_type() == AttrType::UNDEFINED || value.compare(value_) > 0) {
+    value_ = value;
+  }
+  return RC::SUCCESS;
+}
+
+RC MaxAggregator::evaluate(Value &result)
+{
+  if (value_.attr_type() == AttrType::UNDEFINED) {
+    return RC::EMPTY;
+  }
   result = value_;
   return RC::SUCCESS;
 }

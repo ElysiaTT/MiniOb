@@ -17,6 +17,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/expression_tuple.h"
 #include "sql/expr/composite_tuple.h"
 
+#include <algorithm>
+
 using namespace std;
 using namespace common;
 
@@ -80,6 +82,20 @@ RC ScalarGroupByPhysicalOperator::open(Trx *trx)
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to get next tuple. rc=%s", strrc(rc));
     return rc;
+  }
+
+  // COUNT over an empty input still produces one row whose value is zero.
+  if (group_value_ == nullptr) {
+    const bool only_count =
+        std::all_of(aggregate_expressions_.begin(), aggregate_expressions_.end(), [](Expression *expr) {
+          auto *aggregate_expr = static_cast<AggregateExpr *>(expr);
+          return aggregate_expr->aggregate_type() == AggregateExpr::Type::COUNT;
+        });
+    if (only_count) {
+      AggregatorList aggregator_list;
+      create_aggregator_list(aggregator_list);
+      group_value_ = make_unique<GroupValueType>(std::move(aggregator_list), CompositeTuple());
+    }
   }
 
   // 得到最终聚合后的值
