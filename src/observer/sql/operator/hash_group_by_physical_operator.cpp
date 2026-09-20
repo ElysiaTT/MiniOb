@@ -30,6 +30,12 @@ RC HashGroupByPhysicalOperator::open(Trx *trx)
 {
   ASSERT(children_.size() == 1, "group by operator only support one child, but got %d", children_.size());
 
+  // A physical operator may be opened again by tests or future prepared-statement
+  // execution. Never mix groups produced by different executions.
+  groups_.clear();
+  current_group_ = groups_.end();
+  first_emited_  = false;
+
   PhysicalOperator &child = *children_[0];
   RC                rc    = child.open(trx);
   if (OB_FAIL(rc)) {
@@ -112,9 +118,12 @@ RC HashGroupByPhysicalOperator::next()
 
 RC HashGroupByPhysicalOperator::close()
 {
-  children_[0]->close();
+  RC rc = children_[0]->close();
+  groups_.clear();
+  current_group_ = groups_.end();
+  first_emited_  = false;
   LOG_INFO("close group by operator");
-  return RC::SUCCESS;
+  return rc;
 }
 
 Tuple *HashGroupByPhysicalOperator::current_tuple()
