@@ -3,6 +3,29 @@
 This branch implements the coursework topics listed in `docs/docs/game/miniob_topics.md`.
 Local regression results are not a claim of passing the competition's hidden grader.
 
+## Topic matrix
+
+| Topic | Kind | Implementation commit | Local regression |
+| --- | --- | --- | --- |
+| buffer pool LRU | required | upstream LRU + `81e292f` audit | `disk_buffer_pool_test` |
+| select-meta | required | binder validation + `81e292f` audit | `coursework-audit` |
+| drop-table | required | `020c67a` | `coursework-audit` |
+| update | required | `8c211f2` | `coursework-audit` |
+| date | required | `234c52d` | `coursework-audit` |
+| select-tables | required | multi-table planner in `77b56b9` | `join-tables`, `coursework-audit` |
+| aggregation-func | required | `ae825fc` | `coursework-audit`, `null` |
+| join-tables | optional | `77b56b9` | `join-tables` |
+| insert | optional | `6b98192` | `insert` |
+| unique | optional | `9bc8532` | `unique` |
+| null | optional | `9acb278` | `null` (default and MVCC) |
+| simple-sub-query | optional | `44dd89b` | `simple-sub-query` |
+| multi-index | optional | `a814253` | `multi-index` |
+| text | optional | `81e292f` | `text` (default and MVCC) |
+| expression | optional | `7227026`, `81e292f` | `expression`, `coursework-audit` |
+| complex-sub-query | optional | `666e3c6` | `complex-sub-query` |
+| order-by | optional | `868447f` | `order-by` |
+| group-by | optional | `9dd3b4f` | `group-by` |
+
 ## TEXT storage
 
 TEXT values are truncated to 4096 bytes on assignment. A fixed 16-byte locator
@@ -32,15 +55,24 @@ MySQL row encoding grows its buffer and rejects payloads beyond a single packet.
 
 ## Verification status (2026-09-21)
 
-Passed: TEXT in default and MVCC modes; NULL in MVCC mode; default-mode NULL,
-insert, unique, multi-index, order-by, group-by, expression, join-tables,
-simple-sub-query, complex-sub-query; the added LRU unit test and the two enabled
-parser tests. Two upstream parser tests remain disabled.
+The final default-transaction and MVCC runs each passed all 12 static coursework
+cases: coursework-audit, text, null, insert, unique, multi-index, order-by,
+group-by, expression, join-tables, simple-sub-query and complex-sub-query. The
+extended audit includes malformed and invalid-type UPDATE rejection, no-match,
+whole-table, indexed and multi-condition UPDATEs; two- and three-table queries;
+aggregate variants; date validation; restart; indexed drop/recreate; and basic
+CRUD.
 
-Also passed: the extended coursework audit, including rejection of malformed
-UPDATE without changing any rows, and all three disk-buffer-pool unit tests.
+After rebuilding every target, parser, expression, record-manager, all three
+disk-buffer-pool tests and both double-write tests passed. Two upstream parser
+tests remain disabled in the repository.
 
-Both double-write tests (normal writes and exception recovery) also passed.
+The unrelated `BplusTreeLog.concurrency` stress test is still flaky: its base
+recovery test passes, but the randomized concurrent subtest can assert on a
+pre-existing frame pin-count race. The coursework explicitly excludes
+concurrency, the relevant buffer/index sources are unchanged by this stage, and
+the unique/multi-index coursework cases pass in both transaction modes.
+
 Existing MySQL-reference runtime tests require a reference server and are not
 covered by the local static-case runner. The static audit checks mandatory
 features independently, but does not replace hidden grading.

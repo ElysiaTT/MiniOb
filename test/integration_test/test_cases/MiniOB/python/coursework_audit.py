@@ -18,6 +18,7 @@ def create_test_cases() -> TestCase:
   for query in ['SELECT missing FROM audit;', 'SELECT * FROM absent;',
                 'SELECT * FROM audit WHERE missing = 1;',
                 'UPDATE audit SET missing = 1;', 'UPDATE absent SET id = 1;',
+                "UPDATE audit SET age = 'bad' WHERE id = 1;",
                 "INSERT INTO audit VALUES (3, 30, '2021-2-29');",
                 "UPDATE audit SET birthday = '2020-13-01';",
                 "SELECT * FROM audit WHERE birthday = '2021-2-30';"]:
@@ -26,6 +27,9 @@ def create_test_cases() -> TestCase:
   sql('SELECT id FROM audit WHERE id = NULL;', 'id')
   sql('SELECT id/0, NULL+id FROM audit WHERE id = 1;', 'id/0 | NULL+id\nNULL | NULL')
   sql('SELECT id FROM audit WHERE id/0 > 1;', 'id')
+  sql('UPDATE audit SET age = 77 WHERE id = 999;')
+  sql("UPDATE audit SET age = 11 WHERE id = 1 AND birthday = '2020-02-29';")
+  sql('SELECT age FROM audit WHERE id = 1;', 'age\n11')
   sql('UPDATE audit SET age = 30;')
   sql('UPDATE audit SET id = 3 WHERE id = 2;')
   sql('SELECT id FROM audit WHERE id = 2;', 'id')
@@ -35,8 +39,19 @@ def create_test_cases() -> TestCase:
   sql('INSERT INTO other VALUES (1), (3);')
   sql('SELECT audit.id, other.id FROM audit, other WHERE audit.id = other.id ORDER BY audit.id;',
       'audit.id | other.id\n1 | 1\n3 | 3')
-  sql('SELECT count(*), min(age), max(age), avg(age) FROM audit;',
-      'count(*) | min(age) | max(age) | avg(age)\n2 | 30 | 30 | 30')
+  sql('SELECT audit.*, other.* FROM audit, other WHERE audit.id = other.id ORDER BY audit.id;',
+      'audit.id | audit.age | audit.birthday | other.id\n'
+      '1 | 30 | 2020-02-29 | 1\n3 | 30 | 2021-01-02 | 3')
+  sql('CREATE TABLE third(id int);')
+  sql('INSERT INTO third VALUES (1), (4);')
+  sql('SELECT audit.id, other.id, third.id FROM audit, other, third '
+      'WHERE audit.id = other.id AND other.id = third.id;',
+      'audit.id | other.id | third.id\n1 | 1 | 1')
+  sql('SELECT count(*), count(1), count(id), min(age), max(age), avg(age) FROM audit;',
+      'count(*) | count(1) | count(id) | min(age) | max(age) | avg(age)\n'
+      '2 | 2 | 2 | 30 | 30 | 30')
+  sql('DELETE FROM other WHERE id = 3;')
+  sql('SELECT id FROM other ORDER BY id;', 'id\n1')
   g.add_instruction(RestartInstruction())
   sql('SELECT id FROM audit ORDER BY id;', 'id\n1\n3')
   sql('DROP TABLE audit;')
