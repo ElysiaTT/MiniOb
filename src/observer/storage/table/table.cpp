@@ -35,6 +35,16 @@ See the Mulan PSL v2 for more details. */
 #include "storage/table/heap_table_engine.h"
 #include "storage/table/lsm_table_engine.h"
 
+static bool table_has_text_field(const TableMeta &table_meta)
+{
+  for (int i = table_meta.sys_field_num(); i < table_meta.field_num(); i++) {
+    if (table_meta.field(i)->type() == AttrType::TEXTS) {
+      return true;
+    }
+  }
+  return false;
+}
+
 Table::~Table()
 {
   if (lob_handler_ != nullptr) {
@@ -98,6 +108,16 @@ RC Table::create(Db *db, int32_t table_id, const char *path, const char *name, c
 
   db_       = db;
 
+  if (table_has_text_field(table_meta_)) {
+    string lob_file = table_lob_file(base_dir, name);
+    lob_handler_    = new LobFileHandler();
+    rc              = lob_handler_->create_file(lob_file.c_str());
+    if (OB_FAIL(rc)) {
+      LOG_ERROR("Failed to create LOB file. file=%s, rc=%s", lob_file.c_str(), strrc(rc));
+      return rc;
+    }
+  }
+
   string             data_file = table_data_file(base_dir, name);
   BufferPoolManager &bpm       = db->buffer_pool_manager();
   rc                           = bpm.create_file(data_file.c_str());
@@ -143,6 +163,16 @@ RC Table::open(Db *db, const char *meta_file, const char *base_dir)
   fs.close();
 
   db_       = db;
+
+  if (table_has_text_field(table_meta_)) {
+    string lob_file = table_lob_file(base_dir, table_meta_.name());
+    lob_handler_    = new LobFileHandler();
+    RC lob_rc       = lob_handler_->open_file(lob_file.c_str());
+    if (OB_FAIL(lob_rc)) {
+      LOG_ERROR("Failed to open LOB file. file=%s, rc=%s", lob_file.c_str(), strrc(lob_rc));
+      return lob_rc;
+    }
+  }
 
   // // 加载数据文件
   // RC rc = init_record_handler(base_dir);
@@ -267,6 +297,19 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
 
   if (field->nullable()) {
     record_data[field->null_offset()] = 0;
+  }
+  if (field->type() == AttrType::TEXTS) {
+    if (lob_handler_ == nullptr || value.attr_type() != AttrType::TEXTS) {
+      return RC::INTERNAL;
+    }
+    LobLocator locator;
+    locator.length = std::min(value.length(), TEXT_MAX_LENGTH);
+    RC rc = lob_handler_->insert_data(locator.offset, locator.length, value.data());
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    memcpy(record_data + field->offset(), &locator, sizeof(locator));
+    return RC::SUCCESS;
   }
   size_t       copy_len = field->len();
   const size_t data_len = value.length();

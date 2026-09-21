@@ -51,6 +51,11 @@ static bool expression_contains_subquery(Expression &expression)
 
 static bool expression_contains_null(Expression &expression)
 {
+  // Arithmetic can produce NULL (for example division by zero). Columns do
+  // not yet carry null bitmaps, so evaluate these expressions as tuples.
+  if (expression.type() == ExprType::ARITHMETIC) {
+    return true;
+  }
   if (expression.type() == ExprType::VALUE && static_cast<ValueExpr &>(expression).get_value().is_null()) {
     return true;
   }
@@ -106,7 +111,7 @@ static bool logical_plan_requires_tuple_execution(LogicalOperator &logical_opera
     auto &table_get = static_cast<TableGetLogicalOperator &>(logical_operator);
     const TableMeta &table_meta = table_get.table()->table_meta();
     for (int i = table_meta.sys_field_num(); i < table_meta.field_num(); i++) {
-      if (table_meta.field(i)->nullable()) {
+      if (table_meta.field(i)->nullable() || table_meta.field(i)->type() == AttrType::TEXTS) {
         return true;
       }
     }

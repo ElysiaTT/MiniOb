@@ -132,6 +132,37 @@ TEST(BufferPool, create)
   ASSERT_EQ(buffer_pool->id(), buffer_pool2->id());
 }
 
+TEST(BufferPool, lru_pinning_and_flush_failure)
+{
+  BPFrameManager manager("lru_test");
+  ASSERT_EQ(RC::SUCCESS, manager.init(1));
+  for (int page = 1; page <= 3; page++) {
+    Frame *frame = manager.alloc(1, page);
+    ASSERT_NE(nullptr, frame);
+    frame->unpin();
+  }
+  // Touch page 1: eviction order is now 2, 3, 1.
+  Frame *pinned = manager.get(1, 2);
+  ASSERT_NE(nullptr, pinned);
+  Frame *recent = manager.get(1, 1);
+  ASSERT_NE(nullptr, recent);
+  recent->unpin();
+  vector<PageNum> evicted;
+  auto flush = [&evicted](Frame *frame) {
+    evicted.push_back(frame->page_num());
+    return RC::SUCCESS;
+  };
+  ASSERT_EQ(1, manager.purge_frames(1, flush));
+  ASSERT_EQ(vector<PageNum>({3}), evicted); // pinned page 2 is protected
+  ASSERT_EQ(nullptr, manager.get(1, 3));
+  ASSERT_EQ(0, manager.purge_frames(1, [](Frame *) { return RC::IOERR_WRITE; }));
+  ASSERT_EQ(2U, manager.frame_num()); // failed writeback must retain the frame
+  pinned->unpin();
+  ASSERT_EQ(2, manager.purge_frames(3, flush));
+  ASSERT_EQ(vector<PageNum>({3, 2, 1}), evicted);
+  ASSERT_EQ(RC::SUCCESS, manager.cleanup());
+}
+
 int main(int argc, char **argv)
 {
   testing::InitGoogleTest(&argc, argv);

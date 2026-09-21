@@ -309,6 +309,7 @@ ComparisonExpr::~ComparisonExpr() {}
 static RC compare_scalar_values(const Value &left, const Value &right, int &result)
 {
   if (left.attr_type() == right.attr_type() ||
+      (is_string_type(left.attr_type()) && is_string_type(right.attr_type())) ||
       (is_numerical_type(left.attr_type()) && is_numerical_type(right.attr_type()))) {
     result = left.compare(right);
     return RC::SUCCESS;

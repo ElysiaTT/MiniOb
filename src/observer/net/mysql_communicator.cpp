@@ -207,13 +207,13 @@ int store_lenenc_int(char *buf, uint64_t value)
     return 1;
   }
 
-  if (value < (2UL << 16)) {
+  if (value < (1UL << 16)) {
     *buf = 0xFC;
     memcpy(buf + 1, &value, 2);
     return 3;
   }
 
-  if (value < (2UL << 24)) {
+  if (value < (1UL << 24)) {
     *buf = 0xFD;
     memcpy(buf + 1, &value, 3);
     return 4;
@@ -942,7 +942,7 @@ RC MysqlCommunicator::send_result_rows(SessionEvent *event, SqlResult *sql_resul
   RC rc = RC::SUCCESS;
 
   vector<char> packet;
-  packet.resize(4 * 1024 * 1024);  // TODO warning: length cannot be fix
+  packet.resize(1024);
 
   int    affected_rows = 0;
   if (event->session()->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR
@@ -950,6 +950,12 @@ RC MysqlCommunicator::send_result_rows(SessionEvent *event, SqlResult *sql_resul
     rc = write_chunk_result(sql_result, packet, affected_rows, need_disconnect);
   } else {
     rc = write_tuple_result(sql_result, packet, affected_rows, need_disconnect);
+  }
+
+  if (rc != RC::SUCCESS && rc != RC::RECORD_EOF) {
+    sql_result->set_return_code(rc);
+    need_disconnect = true;
+    return rc;
   }
 
   // 所有行发送完成后，发送一个EOF或OK包
@@ -999,13 +1005,21 @@ RC MysqlCommunicator::write_tuple_result(SqlResult *sql_result, vector<char> &pa
       rc = tuple->cell_at(i, value);
       if (rc != RC::SUCCESS) {
         sql_result->set_return_code(rc);
-        break;  // TODO send error packet
+        return rc;
       }
 
+      const string text = value.is_null() ? string() : value.to_string();
+      if (static_cast<size_t>(pos) + text.size() + 9 > 0xFFFFFF + 4) {
+        return RC::IOERR_TOO_LONG;
+      }
+      if (static_cast<size_t>(pos) + text.size() + 9 > packet.size()) {
+        packet.resize(pos + text.size() + 9);
+        buf = packet.data();
+      }
       if (value.is_null()) {
         pos += store_int1(buf + pos, static_cast<int8_t>(0xFB));
       } else {
-        pos += store_lenenc_string(buf + pos, value.to_string().c_str());
+        pos += store_lenenc_string(buf + pos, text.c_str());
       }
     }
 
@@ -1042,10 +1056,18 @@ RC MysqlCommunicator::write_chunk_result(SqlResult *sql_result, vector<char> &pa
 
       for (int col_idx = 0; col_idx < column_num; col_idx++) {
         Value value = chunk.get_value(col_idx, i);
+        const string text = value.is_null() ? string() : value.to_string();
+        if (static_cast<size_t>(pos) + text.size() + 9 > 0xFFFFFF + 4) {
+          return RC::IOERR_TOO_LONG;
+        }
+        if (static_cast<size_t>(pos) + text.size() + 9 > packet.size()) {
+          packet.resize(pos + text.size() + 9);
+          buf = packet.data();
+        }
         if (value.is_null()) {
           pos += store_int1(buf + pos, static_cast<int8_t>(0xFB));
         } else {
-          pos += store_lenenc_string(buf + pos, value.to_string().c_str());
+          pos += store_lenenc_string(buf + pos, text.c_str());
         }
       }
 

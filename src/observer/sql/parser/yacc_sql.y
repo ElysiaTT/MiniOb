@@ -92,6 +92,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         TRX_ROLLBACK
         INT_T
         STRING_T
+        TEXT_T
         FLOAT_T
         DATE_T
         VECTOR_T
@@ -399,7 +400,7 @@ attr_def:
       $$ = new AttrInfoSqlNode;
       $$->type = (AttrType)$2;
       $$->name = $1;
-      $$->length = $4;
+      $$->length = $$->type == AttrType::TEXTS ? TEXT_FIELD_LENGTH : $4;
       $$->nullable = $6;
     }
     | ID type nullable
@@ -407,7 +408,7 @@ attr_def:
       $$ = new AttrInfoSqlNode;
       $$->type = (AttrType)$2;
       $$->name = $1;
-      $$->length = 4;
+      $$->length = $$->type == AttrType::TEXTS ? TEXT_FIELD_LENGTH : 4;
       $$->nullable = $3;
     }
     ;
@@ -423,6 +424,7 @@ number:
 type:
     INT_T      { $$ = static_cast<int>(AttrType::INTS); }
     | STRING_T { $$ = static_cast<int>(AttrType::CHARS); }
+    | TEXT_T   { $$ = static_cast<int>(AttrType::TEXTS); }
     | FLOAT_T  { $$ = static_cast<int>(AttrType::FLOATS); }
     | DATE_T   { $$ = static_cast<int>(AttrType::DATES); }
     | VECTOR_T { $$ = static_cast<int>(AttrType::VECTORS); }

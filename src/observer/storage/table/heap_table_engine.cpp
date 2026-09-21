@@ -376,8 +376,10 @@ RC HeapTableEngine::init()
 
 RC HeapTableEngine::open()
 {
-  RC rc = RC::SUCCESS;
-  init();
+  RC rc = init();
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
   const int index_num = table_meta_->index_num();
   for (int i = 0; i < index_num; i++) {
     const IndexMeta *index_meta = table_meta_->index(i);

@@ -23,8 +23,12 @@ enum class AttrType
   VECTORS,   ///< 向量类型
   BOOLEANS,  ///< boolean类型，当前不是由parser解析出来的，是程序内部使用的
   DATES,     ///< 日期类型(4字节，按YYYYMMDD编码)
+  TEXTS,     ///< 超长字符串，正文存放在表的 LOB 文件中
   MAXTYPE,   ///< 请在 UNDEFINED 与 MAXTYPE 之间增加新类型
 };
+
+constexpr int TEXT_MAX_LENGTH   = 4096;
+constexpr int TEXT_FIELD_LENGTH = 16;  ///< LOB locator 的定长存储大小
 
 const char *attr_type_to_string(AttrType type);
 AttrType    attr_type_from_string(const char *s);

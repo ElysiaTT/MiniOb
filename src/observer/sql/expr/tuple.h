@@ -196,11 +196,29 @@ public:
     FieldExpr       *field_expr = speces_[index];
     const FieldMeta *field_meta = field_expr->field().meta();
     cell.reset();
-    cell.set_type(field_meta->type());
-    cell.set_data(this->record_->data() + field_meta->offset(), field_meta->len());
     if (field_meta->nullable() && this->record_->data()[field_meta->null_offset()] != 0) {
       cell.set_null(field_meta->type());
+      return RC::SUCCESS;
     }
+    if (field_meta->type() == AttrType::TEXTS) {
+      if (field_meta->len() != sizeof(LobLocator) || table_->lob_handler() == nullptr) {
+        return RC::INTERNAL;
+      }
+      LobLocator locator;
+      memcpy(&locator, this->record_->data() + field_meta->offset(), sizeof(locator));
+      if (locator.offset < 0 || locator.length < 0 || locator.length > TEXT_MAX_LENGTH) {
+        return RC::INTERNAL;
+      }
+      vector<char> text_data(locator.length + 1, 0);
+      RC rc = table_->lob_handler()->get_data(locator.offset, locator.length, text_data.data());
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      cell.set_text(text_data.data(), locator.length);
+      return RC::SUCCESS;
+    }
+    cell.set_type(field_meta->type());
+    cell.set_data(this->record_->data() + field_meta->offset(), field_meta->len());
     return RC::SUCCESS;
   }
 

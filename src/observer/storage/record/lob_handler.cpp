@@ -12,11 +12,13 @@ See the Mulan PSL v2 for more details. */
 
 RC LobFileHandler::create_file(const char *file_name)
 {
+  lock_guard<mutex> guard(mutex_);
   return file_.create_file(file_name);
 }
 
 RC LobFileHandler::open_file(const char *file_name)
 {
+  lock_guard<mutex> guard(mutex_);
   std::ifstream file(file_name);
   if (file.good()) {
     return file_.open_file(file_name);
@@ -26,8 +28,18 @@ RC LobFileHandler::open_file(const char *file_name)
   return RC::INTERNAL;
 }
 
+RC LobFileHandler::close_file()
+{
+  lock_guard<mutex> guard(mutex_);
+  return file_.close_file();
+}
+
 RC LobFileHandler::insert_data(int64_t &offset, int64_t length, const char *data)
 {
+  if (length < 0 || length > TEXT_MAX_LENGTH || (length > 0 && data == nullptr)) {
+    return RC::INVALID_ARGUMENT;
+  }
+  lock_guard<mutex> guard(mutex_);
   RC       rc         = RC::SUCCESS;
   int64_t  out_size   = 0;
   int64_t end_offset = 0;
@@ -40,5 +52,24 @@ RC LobFileHandler::insert_data(int64_t &offset, int64_t length, const char *data
   }
   offset = end_offset;
 
-  return rc;
+  // Persist the body before publishing its locator in a record or the redo log.
+  return file_.sync();
+}
+
+RC LobFileHandler::get_data(int64_t offset, int64_t length, char *data)
+{
+  if (offset < 0 || length < 0 || length > TEXT_MAX_LENGTH || (length > 0 && data == nullptr)) {
+    return RC::INVALID_ARGUMENT;
+  }
+  if (length == 0) {
+    return RC::SUCCESS;
+  }
+
+  lock_guard<mutex> guard(mutex_);
+  int64_t           read_size = 0;
+  RC                rc        = file_.read_at(offset, static_cast<int>(length), data, &read_size);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  return read_size == length ? RC::SUCCESS : RC::IOERR_READ;
 }

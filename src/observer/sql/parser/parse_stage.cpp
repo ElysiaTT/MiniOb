@@ -42,8 +42,12 @@ RC ParseStage::handle_request(SQLStageEvent *sql_event)
     return RC::INTERNAL;
   }
 
-  if (parsed_sql_result.sql_nodes().size() > 1) {
-    LOG_WARN("got multi sql commands but only 1 will be handled");
+  if (parsed_sql_result.sql_nodes().size() != 1) {
+    // A syntax error after a valid prefix can append an error node. Never
+    // execute the prefix (an UPDATE may have lost its WHERE clause).
+    sql_result->set_return_code(RC::SQL_SYNTAX);
+    sql_result->set_state_string("");
+    return RC::SQL_SYNTAX;
   }
 
   unique_ptr<ParsedSqlNode> sql_node = std::move(parsed_sql_result.sql_nodes().front());
@@ -51,7 +55,7 @@ RC ParseStage::handle_request(SQLStageEvent *sql_event)
     // set error information to event
     rc = RC::SQL_SYNTAX;
     sql_result->set_return_code(rc);
-    sql_result->set_state_string("Failed to parse sql");
+    sql_result->set_state_string("");
     return rc;
   }
 

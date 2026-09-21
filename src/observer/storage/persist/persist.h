@@ -39,6 +39,8 @@ public:
   /** 关闭当前文件 */
   RC close_file();
 
+  RC sync();
+
   /** 删除指定文件，或删除当前文件 */
   RC remove_file(const char *file_name = nullptr);
 

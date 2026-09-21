@@ -75,7 +75,11 @@ RC DiskDoubleWriteBuffer::open_file(const char *filename)
 
 RC DiskDoubleWriteBuffer::flush_page()
 {
-  sync();
+  // Make the double-write copy durable before writing home pages. A global
+  // sync also waits for unrelated filesystems (including WSL network mounts).
+  if (file_desc_ < 0 || fsync(file_desc_) != 0) {
+    return RC::IOERR_WRITE;
+  }
 
   for (const auto &pair : dblwr_pages_) {
     RC rc = write_page(pair.second);
@@ -299,4 +303,3 @@ RC VacuousDoubleWriteBuffer::add_page(DiskBufferPool *bp, PageNum page_num, Page
 {
   return bp->write_page(page_num, page);
 }
-

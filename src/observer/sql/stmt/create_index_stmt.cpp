@@ -55,6 +55,10 @@ RC CreateIndexStmt::create(Db *db, const CreateIndexSqlNode &create_index, Stmt 
           db->name(), table_name, field_name.c_str());
       return RC::SCHEMA_FIELD_NOT_EXIST;
     }
+    if (field_meta->type() == AttrType::TEXTS) {
+      LOG_WARN("TEXT fields cannot be indexed. table=%s, field=%s", table_name, field_name.c_str());
+      return RC::UNSUPPORTED;
+    }
     field_metas.emplace_back(field_meta);
   }
 

@@ -22,6 +22,11 @@ PersistHandler::PersistHandler() {}
 
 PersistHandler::~PersistHandler() { close_file(); }
 
+RC PersistHandler::sync()
+{
+  return file_desc_ >= 0 && ::fsync(file_desc_) == 0 ? RC::SUCCESS : RC::IOERR_WRITE;
+}
+
 RC PersistHandler::create_file(const char *file_name)
 {
   RC rc = RC::SUCCESS;

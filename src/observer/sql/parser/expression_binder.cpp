@@ -459,7 +459,7 @@ RC ExpressionBinder::bind_arithmetic_expression(
     left_expr.reset(left.release());
   }
 
-  if (!is_numerical_type(left_expr->value_type())) {
+  if (!is_numerical_type(left_expr->value_type()) && left_expr->value_type() != AttrType::UNDEFINED) {
     LOG_WARN("arithmetic expression only supports numeric operands");
     return RC::INVALID_ARGUMENT;
   }
@@ -488,7 +488,7 @@ RC ExpressionBinder::bind_arithmetic_expression(
     right_expr.reset(right.release());
   }
 
-  if (!is_numerical_type(right_expr->value_type())) {
+  if (!is_numerical_type(right_expr->value_type()) && right_expr->value_type() != AttrType::UNDEFINED) {
     LOG_WARN("arithmetic expression only supports numeric operands");
     return RC::INVALID_ARGUMENT;
   }

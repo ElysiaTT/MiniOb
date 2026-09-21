@@ -97,6 +97,10 @@ class MiniObServer:
                 if p.name() != process_name:
                     continue
                 cmdline = p.cmdline()
+                # A test run owns its endpoint, not every process using the
+                # same binary. In particular, do not stop another test run.
+                if self.__server_socket and self.__server_socket not in cmdline:
+                    continue
                 if len(cmdline) >= 1:
                     binary_path = cmdline[0]
                     if binary_path != observer_path:
@@ -304,4 +308,3 @@ class MiniObServer:
         except Exception as ex:
             self.__logger.info('failed to get core backtrace. core file=%s, ex=%s', core_file, str(ex))
             return None
-    
